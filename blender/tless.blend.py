@@ -1,12 +1,13 @@
+import bpy
+import numpy as np
+
 # Update python-path with current blend file directory,
 # so that package `tless` can be found.
-import bpy
 import sys
 p = bpy.path.abspath("//")
 if p not in sys.path:
     sys.path.append(p)
 
-import numpy as np
 from blendtorch import btb
 from tless import scene
 import re
@@ -36,11 +37,16 @@ def main():
         
     def post_frame(off, pub, anim, cam):
         if anim.frameid == 2:        
-            pub.publish(
-                image=off.render(), 
-                bboxes=bboxes(cam, objs),
-                cids=classids(objs)
-            )
+            for _ in range(4):
+                pub.publish(
+                    image=off.render(), 
+                    bboxes=bboxes(cam, objs),
+                    cids=classids(objs)
+                )
+                lfrom = btb.utils.random_spherical_loc(
+                    radius_range=(8,10), theta_range=(0,np.pi/4)
+                )
+                cam.look_at(look_at=[0,0,0], look_from=lfrom)
 
     def post_anim(anim):
         nonlocal objs, occs
