@@ -36,7 +36,10 @@ def main():
         objs, occs = scene.create_scene()
         
     def post_frame(off, pub, anim, cam):
-        if anim.frameid == 2:        
+        if anim.frameid == 2: 
+            # Instead of generating just one image per simulation,
+            # we generate N images from the same scene using 
+            # random camera poses.       
             for _ in range(4):
                 pub.publish(
                     image=off.render(), 
