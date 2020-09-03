@@ -2,9 +2,6 @@ import bpy
 import numpy as np
 import supershape as sshape
 
-# import sys
-# sys.path.append('c:/dev/supershape')
-
 SCN = bpy.context.scene
 LAYER = bpy.context.view_layer
 
@@ -87,8 +84,8 @@ def apply_physics_to(objs, enabled=False, collision_shape='BOX', friction=0.5, l
         obj.rigid_body.angular_damping = angular_damp
 
 def create_scene():    
-    objs = [create_object() for _ in range(20)]
-    occs = [create_occluder() for _ in range(7)]
+    objs = [create_object() for _ in range(10)]
+    occs = [create_occluder() for _ in range(5)]
     
     apply_physics_to(
         objs,
