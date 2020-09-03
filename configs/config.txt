@@ -1,0 +1,28 @@
+# Common path for .blend and .blend.py files without extension
+scene: blender/tless
+
+# Replay from disc instead of launching from Blender
+replay: True
+
+# Record raw blender data
+record: False
+
+# Data
+mean: [0.485, 0.456, 0.406]
+std: [0.229, 0.224, 0.225]
+h: 512
+w: 512
+num_classes: 30
+n_max: 10
+augment: False
+
+# Training
+num_epochs: 10
+batch_size: 4
+lr: 1.25e-4
+val_interval: 5
+
+# System
+blend_path: C:/Program Files/Blender Foundation/Blender 2.90
+blender_instances: 2
+worker_instances: 0
