@@ -25,21 +25,39 @@ def iterate(dl):
         plt.close(fig)
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser('Record blendtorch t-less datasets')
+    parser.add_argument('--num-items', default=512, type=int)
+    parser.add_argument('--num-instances', default=4, type=int)
+    parser.add_argument('--prefix-name', default='tless')    
+    parser.add_argument('--json-config', help='JSON configuration file')
+    args = parser.parse_args()
+
     # Define how we want to launch Blender
     launch_args = dict(
         scene=Path(__file__).parent/'blender'/'tless.blend',
         script=Path(__file__).parent/'blender'/'tless.blend.py',
-        num_instances=1, 
+        num_instances=args.num_instances, 
         named_sockets=['DATA'],
     )
+
+    if args.json_config:
+        path = Path(args.json_config)
+        assert path.exists()
+        launch_args['instance_args'] = [['--json-config', args.json_config]] * args.num_instances
+
 
     # Launch Blender
     with btt.BlenderLauncher(**launch_args) as bl:
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
-        ds = btt.RemoteIterableDataset(addr, max_items=128, record_path_prefix='tmp/tless')
+        ds = btt.RemoteIterableDataset(addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.prefix_name}')
         dl = data.DataLoader(ds, batch_size=4, num_workers=4) # bug when num_workers = 4, the batch size is only one then??
         iterate(dl)
+
+    if args.json_config:
+        from shutil import copyfile
+        copyfile(args.json_config, f'tmp/{args.prefix_name}.json')
 
 if __name__ == '__main__':
     main()

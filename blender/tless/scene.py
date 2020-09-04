@@ -7,24 +7,33 @@ LAYER = bpy.context.view_layer
 
 from .config import DEFAULT_CONFIG
 
-def create_bsdf_material(basecolor=None):
-    mat = bpy.data.materials.new("randommat")
-    mat.use_nodes = True
-    node_tree = mat.node_tree
-    nodes = node_tree.nodes
-    bsdf = nodes.get("Principled BSDF") 
+def randomize_bsdf_material(mat, basecolor=None):
+    bsdf = mat.node_tree.nodes.get("Principled BSDF") 
     if basecolor is None:
         basecolor = np.random.uniform(0,1,size=3)
     bsdf.inputs["Base Color"].default_value = np.concatenate((basecolor, [1.]))
     return mat
 
-def randomize_box_material():
-    mat = bpy.data.materials['BoxMaterial']
-    node_tree = mat.node_tree
-    nodes = node_tree.nodes
-    mapping = nodes.get('Mapping')
-    mapping.inputs['Rotation'].default_value = np.random.uniform(-1.0, 1.0, size=3)
-    mapping.inputs['Scale'].default_value = np.random.uniform(0.1, 3.0, size=3)
+def create_bsdf_material(basecolor=None):
+    mat = bpy.data.materials.new("randommat")
+    mat.use_nodes = True
+    randomize_bsdf_material(mat, basecolor=basecolor)
+    return mat
+
+def randomize_box_material(cfg):
+    box = bpy.data.objects['Box']
+    if cfg['scene.background_material'] == 'magic':
+        mat = bpy.data.materials['BoxMaterialMagic']
+        node_tree = mat.node_tree
+        nodes = node_tree.nodes
+        mapping = nodes.get('Mapping')
+        mapping.inputs['Rotation'].default_value = np.random.uniform(-1.0, 1.0, size=3)
+        mapping.inputs['Scale'].default_value = np.random.uniform(0.1, 3.0, size=3)
+    elif cfg['scene.background_material'] == 'plain':
+        mat = create_bsdf_material()
+        randomize_bsdf_material(mat)
+    # Box already has materials, so assign to slot 0 instead of active_material.
+    box.data.materials[0] = mat
 
 def create_object(cfg=DEFAULT_CONFIG):
     # See https://blender.stackexchange.com/questions/135597/how-to-duplicate-an-object-in-2-8-via-the-python-api-without-using-bpy-ops-obje
@@ -115,6 +124,6 @@ def create_scene(cfg=DEFAULT_CONFIG):
         friction=cfg['physics.friction'],
         angular_damp=cfg['physics.angular_damp'])
         
-    randomize_box_material()
+    randomize_box_material(cfg)
         
     return objs, occs

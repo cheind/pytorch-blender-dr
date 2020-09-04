@@ -1,5 +1,7 @@
 import bpy
 import numpy as np
+import argparse
+import json
 
 # Update python-path with current blend file directory,
 # so that package `tless` can be found.
@@ -12,12 +14,24 @@ from blendtorch import btb
 from tless import scene, annotation
 from tless.config import DEFAULT_CONFIG
 
-def main(cfg):
+def parse_additional_args(remainder):
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--json-config')
+    return parser.parse_args(remainder)
+
+def main():
     # Parse script arguments passed via blendtorch launcher
     btargs, remainder = btb.parse_blendtorch_args()
+    otherargs = parse_additional_args(remainder)
+
+    if otherargs.json_config is not None:
+        print('Got custom configuration file.')
+        with open(otherargs.json_config, 'r') as fp:
+            cfg = json.loads(fp.read())
+    else:
+        cfg = DEFAULT_CONFIG    
 
     objs, occs = None, None
-
     def pre_anim():
         nonlocal objs, occs
         objs, occs = scene.create_scene(cfg)
@@ -67,4 +81,4 @@ def main(cfg):
     anim.play(frame_range=(1,3), num_episodes=-1, use_animation=False)
     
 
-main(DEFAULT_CONFIG)
+main()
