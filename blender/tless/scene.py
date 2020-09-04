@@ -94,12 +94,11 @@ def apply_physics_to(objs, enabled=False, collision_shape='BOX', friction=0.5, l
         obj.rigid_body.angular_damping = angular_damp
 
 def create_scene(cfg=DEFAULT_CONFIG):    
-    N = cfg['scene.num_entities']
-    b = np.random.binomial(N, 1-cfg['scene.prob_occluder'],size=1)
-    M = N - b.sum()
+    N = cfg['scene.num_objects']
+    M = np.random.binomial(N, cfg['scene.prob_occluder'],size=1).sum()
 
-    objs = [create_object(cfg) for _ in range(b.sum())]
-    occs = [create_occluder(cfg) for _ in range(N - b.sum())]
+    objs = [create_object(cfg) for _ in range(N)]
+    occs = [create_occluder(cfg) for _ in range(M)]
     
     apply_physics_to(
         objs,
