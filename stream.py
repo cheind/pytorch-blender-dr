@@ -29,7 +29,7 @@ def main():
     launch_args = dict(
         scene=Path(__file__).parent/'blender'/'tless.blend',
         script=Path(__file__).parent/'blender'/'tless.blend.py',
-        num_instances=2, 
+        num_instances=1, 
         named_sockets=['DATA'],
     )
 
@@ -37,8 +37,8 @@ def main():
     with btt.BlenderLauncher(**launch_args) as bl:
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
-        ds = btt.RemoteIterableDataset(addr, max_items=128, record_path_prefix='tmp/tless')
-        dl = data.DataLoader(ds, batch_size=4, num_workers=1) # bug when num_workers = 4, the batch size is only one then??
+        ds = btt.RemoteIterableDataset(addr, max_items=4, record_path_prefix='tmp/tless')
+        dl = data.DataLoader(ds, batch_size=4, num_workers=0) # bug when num_workers = 4, the batch size is only one then??
         iterate(dl)
 
 if __name__ == '__main__':

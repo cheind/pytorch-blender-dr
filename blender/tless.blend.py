@@ -9,47 +9,35 @@ if p not in sys.path:
     sys.path.append(p)
 
 from blendtorch import btb
-from tless import scene
-import re
+from tless import scene, annotation
+from tless.config import DEFAULT_CONFIG
 
-def main():
+def main(cfg):
     # Parse script arguments passed via blendtorch launcher
     btargs, remainder = btb.parse_blendtorch_args()
 
     objs, occs = None, None
-    reg = r'^obj\_(\d+)\.'
 
-    def bboxes(cam, objs):
-        bbox_xy = cam.bbox_object_to_pixel(*objs).reshape(-1,8,2)
-        minc = bbox_xy.min(1)
-        maxc = bbox_xy.max(1)
-        wh = maxc-minc
-        return np.concatenate((minc,wh), -1)
-
-    def classids(objs):
-        return np.array(
-            [int(re.match(reg, obj.name).group(1)) for obj in objs],
-            dtype=np.long)
-    
     def pre_anim():
         nonlocal objs, occs
-        objs, occs = scene.create_scene()
+        objs, occs = scene.create_scene(cfg)
         
     def post_frame(off, pub, anim, cam):
         if anim.frameid == 2: 
             # Instead of generating just one image per simulation,
             # we generate N images from the same scene using 
             # random camera poses.       
-            for _ in range(4):
+            for _ in range(cfg['camera.num_images']):
                 pub.publish(
                     image=off.render(), 
-                    bboxes=bboxes(cam, objs),
-                    cids=classids(objs)
+                    bboxes=annotation.bboxes(cam, objs),
+                    cids=annotation.classids(objs)
                 )
                 lfrom = btb.utils.random_spherical_loc(
-                    radius_range=(8,10), theta_range=(0,np.pi/4)
+                    radius_range=cfg['camera.radius_range'], 
+                    theta_range=cfg['camera.theta_range']
                 )
-                cam.look_at(look_at=[0,0,0], look_from=lfrom)
+                cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
 
     def post_anim(anim):
         nonlocal objs, occs
@@ -77,7 +65,6 @@ def main():
     anim.post_animation.add(post_anim, anim)
     # Cant use animation system here
     anim.play(frame_range=(1,3), num_episodes=-1, use_animation=False)
-
     
 
-main()
+main(DEFAULT_CONFIG)
