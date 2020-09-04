@@ -49,6 +49,69 @@ class Transformation:
 
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
 
+    def gen_map(self, shape, xy: np.ndarray,  # cids: np.ndarray, num_classes,
+                mask=None, sigma=4, cutoff=1e-3, normalize=False, bleed=True):
+        """
+        Generates a single belief map of 'shape' for each point in 'xy'.
+
+        Parameters
+        ----------
+        shape: tuple
+            h x w of image
+        xy: n x 2
+            n points with x, y coordinates (image coordinate system)
+        cids: n,
+            class ids
+        num_classes: scalar
+            num. of classes
+        mask: n,
+            zero-one mask to select points from xy
+        sigma: scalar
+            gaussian sigma
+        cutoff: scalar
+            set belief to zero if it is less then cutoff
+        normalize: bool
+            whether to multiply with the gaussian normalization factor or not
+
+        Returns
+        -------
+        belief map: 1 x h x w  # num_classes x h x w
+        """
+        n = xy.shape[0]
+        h, w = shape[:2]
+
+        if n == 0:
+            return np.zeros((num_classes, h, w), dtype=np.float32)
+
+        if not bleed:
+            wh = np.asarray([w - 1, h - 1])[None, :]
+            mask_ = np.logical_or(xy[..., :2] < 0, xy[..., :2] > wh).any(-1)
+            xy = xy.copy()
+            xy[mask_] = np.nan
+
+        # grid is 2 x h x h
+        grid = np.array(np.meshgrid(np.arange(w), np.arange(h)), dtype=np.float32)
+        # reshape grid to 1 x 2 x h x w
+        grid = grid.reshape((1, 2, h, w))
+        # reshape xy to n x 2 x 1 x 1
+        xy = xy.reshape(n, 2, 1, 1)
+        # compute squared distances to joints
+        d = ((grid - xy) ** 2).sum(1)
+        # compute gaussian
+        b = np.nan_to_num(np.exp(-(d / (2.0 * sigma ** 2))))
+
+        if normalize:
+            b = b / np.sqrt(2 * np.pi) / sigma  # n x h x w
+
+        # b is n x h x w
+        b[(b < cutoff)] = 0
+
+        if mask is not None:
+            # set the invalid center point maps to all zero
+            b *= mask[:, None, None]  # n x h x w
+
+        return b.max(0, keepdims=True)  # 1 x h x w
+
     def item_transform(self, item):
         """
         Transform data for training.
@@ -60,7 +123,7 @@ class Transformation:
 
         :return: dictionary
             - image: 3 x 512 x 512
-            - cpt_hm: num_classes x 128 x 128
+            - cpt_hm: 1 x 128 x 128 # num_classes x 128 x 128
             - cpt_off: n_max x 2 low resolution offset - [0, 1)
             - cpt_ind: n_max, low resolution indices - [0, 128^2)
             - cpt_mask: n_max,
@@ -71,14 +134,25 @@ class Transformation:
         bboxes = item['bboxes']
         cids = item["cids"]
 
+        h, w = image.shape[:2]
+
+        for bbox in bboxes:
+            x, y, bw, bh = bbox
+            pass
+
+        bboxes = np.array([[600, 500, 40, 12]], dtype=np.float32).repeat(9, 0)
+        bboxes = np.concatenate((bboxes, np.array([[200, 200, 50, 50]])))
+
+
         # prepare bboxes for transformation
-        bbox_labels = np.array(list(range(len(bboxes))), dtype=np.float32)
-        bboxes = np.concatenate((bboxes, bbox_labels), axis=-1)
+        bbox_labels = np.arange(len(bboxes), dtype=np.float32)
+        bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
 
         transformed = self.transform_fn(image=image, bboxes=bboxes)
-        image = np.array(transformed["image"], dtype=np.flaot32)
+        image = np.array(transformed["image"], dtype=np.float32)
         image = image.transpose((2, 0, 1))  # 3 x h x w
         bboxes = np.array(transformed["bboxes"], dtype=np.float32)
+        # TODO: nua der letzte eintrag hat ueberlebt -> folge fehler cpt_ind
 
         # bboxes can be dropped
         len_valid = len(bboxes)
@@ -86,10 +160,10 @@ class Transformation:
         # to be batched we have to bring everything to the same shape
         cpt = np.zeros((self.n_max, 2), dtype=np.float32)
         # get center points of bboxes (image coordinates)
-        cpt[:len_valid, 0] = bboxes[:, 0] + bboxes[:, 2] / 2
-        cpt[:len_valid, 1] = bboxes[:, 1] + bboxes[:, 3] / 2
+        cpt[:len_valid, 0] = bboxes[:, 0] + bboxes[:, 2] / 2  # x
+        cpt[:len_valid, 1] = bboxes[:, 1] + bboxes[:, 3] / 2  # y
 
-        cpt_mask = np.zeros((self.n_max, 2), dtype=np.uint8)
+        cpt_mask = np.zeros((self.n_max,), dtype=np.uint8)
         cpt_mask[:len_valid] = 1
 
         wh = np.zeros((self.n_max, 2), dtype=np.float32)
@@ -97,22 +171,23 @@ class Transformation:
 
         cls_id = np.zeros((self.n_max,), dtype=np.uint8)
         # the bbox labels help to reassign the correct classes
-        cls_id[:len_valid] = cids[bboxes[:, -1]]
+        cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
 
-        # low resolution dimensions
-        hl, wl = self.h / self.down_ratio, self.w / self.down_ratio
+        # LOW RESOLUTION dimensions
+        hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
         cpt = cpt / self.down_ratio
 
         # discrete center point coordinates
         cpt_int = cpt.astype(np.int32)
 
         cpt_ind = np.zeros((self.n_max,), dtype=np.int64)
-        cpt_ind[:len_valid] = cpt_int[:, 1] * wl + cpt_int[:, ]
+        # index = y * wl + x
+        cpt_ind[:len_valid] = cpt_int[:, 1] * wl + cpt_int[:, 0]
 
         cpt_off = np.zeros((self.n_max, 2), dtype=np.float32)
-        cpt_off
+        cpt_off[:len_valid] = cpt - cpt_int
 
-        cpt_hm = gen_map((hl, wl), cpt, mask=cpt_mask)
+        cpt_hm = self.gen_map((hl, wl), cpt, mask=cpt_mask)  # 1 x hl x wl
 
         item = {
             "image": image,
@@ -124,9 +199,6 @@ class Transformation:
             "cls_id": cls_id
         }
         return item
-
-    def post_process(self):
-        pass  # denormalize
 
 
 def iterate(dl):
@@ -190,21 +262,37 @@ def main(opt):
         # Setup DataLoader and iterate
         dl = data.DataLoader(ds, batch_size=opt.batch_size, num_workers=opt.worker_instances, shuffle=shuffle)
 
+        batch = next(iter(dl))
+        for k, v in batch.items():
+            print(k, v.shape)
+
+        plt.imshow(batch["cpt_hm"].squeeze(0).permute(1, 2, 0).numpy())
+        plt.show()
+
         # Generate images of the recorded data
         if opt.record:
             iterate(dl)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        #"""
         # heads - head_name: num. channels of model
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
         model = get_model(heads)
 
-        optimizer = optim.Adam(model.parameters(), opt.lr)
+
+        # t = torch.randn(4, 3, 512, 512)
+        # out = model(t)
+        # print(out["cpt_hm"].shape,
+        #       out["cpt_off"].shape,
+        #       out["wh"].shape)
+        #
+        #
+        # output, batch
 
         loss_fn = CenterLoss()
 
+        optimizer = optim.Adam(model.parameters(), opt.lr)
+        """
         for epoch in opt.num_epochs:
             epoch += 1
 
@@ -212,8 +300,7 @@ def main(opt):
 
             if epoch % opt.val_interval == 0:
                 eval(epoch, model, dl, device, loss_fn)
-        #"""
-
+        """
 
 
 if __name__ == '__main__':
