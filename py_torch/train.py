@@ -1,6 +1,6 @@
 import torch
 
-from lib.utils import MetricMeter
+from .utils import MetricMeter
 
 
 def train(epoch, model, optimizer, dataloader, device, loss_fn):
