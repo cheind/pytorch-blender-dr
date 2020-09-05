@@ -5,45 +5,64 @@ import supershape as sshape
 SCN = bpy.context.scene
 LAYER = bpy.context.view_layer
 
-def create_bsdf_material(basecolor=None):
-    mat = bpy.data.materials.new("randommat")
-    mat.use_nodes = True
-    node_tree = mat.node_tree
-    nodes = node_tree.nodes
-    bsdf = nodes.get("Principled BSDF") 
+from .config import DEFAULT_CONFIG
+
+def randomize_bsdf_material(mat, basecolor=None):
+    bsdf = mat.node_tree.nodes.get("Principled BSDF") 
     if basecolor is None:
         basecolor = np.random.uniform(0,1,size=3)
     bsdf.inputs["Base Color"].default_value = np.concatenate((basecolor, [1.]))
     return mat
 
-def randomize_box_material():
-    mat = bpy.data.materials['BoxMaterial']
-    node_tree = mat.node_tree
-    nodes = node_tree.nodes
-    mapping = nodes.get('Mapping')
-    mapping.inputs['Rotation'].default_value = np.random.uniform(-1.0, 1.0, size=3)
-    mapping.inputs['Scale'].default_value = np.random.uniform(0.1, 3.0, size=3)
+def create_bsdf_material(basecolor=None):
+    mat = bpy.data.materials.new("randommat")
+    mat.use_nodes = True
+    randomize_bsdf_material(mat, basecolor=basecolor)
+    return mat
 
-def create_object():
+def randomize_box_material(cfg):
+    box = bpy.data.objects['Box']
+    if cfg['scene.background_material'] == 'magic':
+        mat = bpy.data.materials['BoxMaterialMagic']
+        node_tree = mat.node_tree
+        nodes = node_tree.nodes
+        mapping = nodes.get('Mapping')
+        mapping.inputs['Rotation'].default_value = np.random.uniform(-1.0, 1.0, size=3)
+        mapping.inputs['Scale'].default_value = np.random.uniform(0.1, 3.0, size=3)
+    elif cfg['scene.background_material'] == 'plain':
+        mat = create_bsdf_material()
+        randomize_bsdf_material(mat)
+    # Box already has materials, so assign to slot 0 instead of active_material.
+    box.data.materials[0] = mat
+
+def create_object(cfg=DEFAULT_CONFIG):
     # See https://blender.stackexchange.com/questions/135597/how-to-duplicate-an-object-in-2-8-via-the-python-api-without-using-bpy-ops-obje
     tcoll = SCN.collection.children['Objects']      
     gcoll = SCN.collection.children['Generated']
     
     templates = list(tcoll.objects)
-    c = np.random.choice(len(templates))
+    if cfg['scene.object_cls_prob'] is None:
+        ids = np.arange(len(templates))
+        p = np.ones(len(templates))
+    else:
+        d = cfg['scene.object_cls_prob']
+        ids = list(map(int, d.keys()))
+        p = np.array(list(d.values()))
+    p /= p.sum()
+    c = np.random.choice(ids, p=p)
     
     new_obj = templates[c].copy()
     new_obj.data = templates[c].data.copy()
     
-    intensity = np.random.uniform(0.1,1)
+    intensity = np.random.uniform(*cfg['scene.object_intensity_range'])
     new_obj.active_material = create_bsdf_material((intensity, intensity, intensity))
     gcoll.objects.link(new_obj)
     
-    new_obj.location = np.random.uniform(low=[-2, -2, 1],high=[2,2,4],size=(3))
-    new_obj.rotation_euler = np.random.uniform(low=-np.pi, high=np.pi,size=(3))
+    new_obj.location = np.random.uniform(low=cfg['scene.object_location_bbox'][0],high=cfg['scene.object_location_bbox'][1],size=(3))
+    new_obj.rotation_euler = np.random.uniform(low=cfg['scene.object_rotation_range'][0], high=cfg['scene.object_rotation_range'][1],size=(3))
     return new_obj
     
-def create_occluder():
+def create_occluder(cfg=DEFAULT_CONFIG):
     coll = SCN.collection.children['Occluders']
     
     shape=(50,50)
@@ -83,25 +102,28 @@ def apply_physics_to(objs, enabled=False, collision_shape='BOX', friction=0.5, l
         obj.rigid_body.linear_damping = linear_damp
         obj.rigid_body.angular_damping = angular_damp
 
-def create_scene():    
-    objs = [create_object() for _ in range(10)]
-    occs = [create_occluder() for _ in range(5)]
+def create_scene(cfg=DEFAULT_CONFIG):    
+    N = cfg['scene.num_objects']
+    M = np.random.binomial(N, cfg['scene.prob_occluder'],size=1).sum()
+
+    objs = [create_object(cfg) for _ in range(N)]
+    occs = [create_occluder(cfg) for _ in range(M)]
     
     apply_physics_to(
         objs,
         enabled=True,
-        linear_damp=0.1,
-        friction=0.8,
-        angular_damp=0.2)
+        linear_damp=cfg['physics.linear_damp'],
+        friction=cfg['physics.friction'],
+        angular_damp=cfg['physics.angular_damp'])
         
     apply_physics_to(
         occs,
         collision_shape='CONVEX_HULL',
         enabled=True,
-        linear_damp=0.7,
-        friction=0.8,
-        angular_damp=0.6)
+        linear_damp=cfg['physics.linear_damp'],
+        friction=cfg['physics.friction'],
+        angular_damp=cfg['physics.angular_damp'])
         
-    randomize_box_material()
+    randomize_box_material(cfg)
         
     return objs, occs
