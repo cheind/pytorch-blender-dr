@@ -127,7 +127,7 @@ class Transformation:
             - cpt_off: n_max x 2 low resolution offset - [0, 1)
             - cpt_ind: n_max, low resolution indices - [0, 128^2)
             - cpt_mask: n_max,
-            - wh: n_max, 2
+            - wh: n_max x 2, low resolution width, height - [0, 128], [0, 128]
             - cls_id: n_max,
         """
         image = item["image"]
@@ -136,13 +136,22 @@ class Transformation:
 
         h, w = image.shape[:2]
 
-        for bbox in bboxes:
-            x, y, bw, bh = bbox
-            pass
+        # bboxes = np.array([[500, 400, 40, 12]], dtype=np.float32).repeat(9, 0)
+        # bboxes = np.concatenate((bboxes, np.array([[200, 200, 50, 50]])))
 
-        bboxes = np.array([[600, 500, 40, 12]], dtype=np.float32).repeat(9, 0)
-        bboxes = np.concatenate((bboxes, np.array([[200, 200, 50, 50]])))
-
+        # adjust bboxes to pass initial - check_bbox(bbox) - call
+        # from the albumentations package
+        # library can't deal with bbox corners outside of the image
+        x, y, bw, bh = np.split(bboxes, 4, -1)  # each n x 1
+        x[x < 0] = 0
+        y[y < 0] = 0
+        x[x > w] = w
+        y[y > h] = h
+        bw[x + bw > w] = w - x[x + bw > w]
+        bh[y + bh > h] = h - y[y + bh > h]
+        bboxes = np.concatenate((x, y, bw, bh), axis=-1)
+        # note: further processing is done by albumentations, bboxes
+        # are dropped when not satisfying min. area or visibility!
 
         # prepare bboxes for transformation
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)
@@ -152,7 +161,6 @@ class Transformation:
         image = np.array(transformed["image"], dtype=np.float32)
         image = image.transpose((2, 0, 1))  # 3 x h x w
         bboxes = np.array(transformed["bboxes"], dtype=np.float32)
-        # TODO: nua der letzte eintrag hat ueberlebt -> folge fehler cpt_ind
 
         # bboxes can be dropped
         len_valid = len(bboxes)
@@ -166,6 +174,7 @@ class Transformation:
         cpt_mask = np.zeros((self.n_max,), dtype=np.uint8)
         cpt_mask[:len_valid] = 1
 
+        # TODO: divide by 4 -> low res,
         wh = np.zeros((self.n_max, 2), dtype=np.float32)
         wh[:len_valid, :] = bboxes[:, 2:-1]
 
@@ -182,10 +191,10 @@ class Transformation:
 
         cpt_ind = np.zeros((self.n_max,), dtype=np.int64)
         # index = y * wl + x
-        cpt_ind[:len_valid] = cpt_int[:, 1] * wl + cpt_int[:, 0]
+        cpt_ind[:len_valid] = cpt_int[:len_valid, 1] * wl + cpt_int[:len_valid, 0]
 
         cpt_off = np.zeros((self.n_max, 2), dtype=np.float32)
-        cpt_off[:len_valid] = cpt - cpt_int
+        cpt_off[:len_valid] = (cpt - cpt_int)[:len_valid]
 
         cpt_hm = self.gen_map((hl, wl), cpt, mask=cpt_mask)  # 1 x hl x wl
 
@@ -259,18 +268,23 @@ def main(opt):
             ds = btt.FileDataset(f'./data/record_{name}', item_transform=item_transform)
             shuffle = True
 
+        # try to over fit on a single example
+        ds = data.Subset(ds, indices=[0])
+
         # Setup DataLoader and iterate
         dl = data.DataLoader(ds, batch_size=opt.batch_size, num_workers=opt.worker_instances, shuffle=shuffle)
 
-        batch = next(iter(dl))
-        for k, v in batch.items():
-            print(k, v.shape)
+        # batch = next(iter(dl))
+        # for k, v in batch.items():
+        #     print(k, v.shape)
+        #
+        # plt.imshow(batch["cpt_hm"].squeeze(0).permute(1, 2, 0).numpy())
+        # plt.show()
+        # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
+        # plt.show()
 
-        plt.imshow(batch["cpt_hm"].squeeze(0).permute(1, 2, 0).numpy())
-        plt.show()
-
-        # Generate images of the recorded data
         if opt.record:
+            print("Generating images of the recorded data...")
             iterate(dl)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -291,16 +305,37 @@ def main(opt):
 
         loss_fn = CenterLoss()
 
-        optimizer = optim.Adam(model.parameters(), opt.lr)
-        """
-        for epoch in opt.num_epochs:
-            epoch += 1
+        # batch = next(iter(dl))
+        # out = model(batch["image"])
+        # test_loss = loss_fn(out, batch)
 
+        optimizer = optim.Adam(model.parameters(), opt.lr)
+
+        for epoch in range(1, opt.num_epochs + 1):
             train(epoch, model, optimizer, dl, device, loss_fn)
 
-            if epoch % opt.val_interval == 0:
-                eval(epoch, model, dl, device, loss_fn)
-        """
+            #if epoch % opt.val_interval == 0:
+                #eval(epoch, model, dl, device, loss_fn)
+
+        PATH = "./models/center_net.pth"
+        torch.save({
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+        }, PATH)
+
+        checkpoint = torch.load(PATH)
+        heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
+        model = get_model(heads)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        optimizer = optim.Adam(model.parameters(), opt.lr)
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+        model.eval()
+
+        batch = next(iter(dl))
+        out = model(batch["image"])
+        test_loss = loss_fn(out, batch)
+        print(test_loss)
 
 
 if __name__ == '__main__':
