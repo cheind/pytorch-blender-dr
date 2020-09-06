@@ -14,10 +14,11 @@ def main():
     # Parse script arguments passed via blendtorch launcher
     btargs, remainder = btb.parse_blendtorch_args()
 
-    cabinets = scene.create_scene(num_objects=20)
+    cabinets = None
 
-    def pre_frame():
-        pass
+    def pre_anim():
+        nonlocal cabinets
+        cabinets = scene.create_scene(num_objects=20)
         
     def post_frame(off, pub, anim, cam):
         pub.publish(
@@ -25,6 +26,11 @@ def main():
             bboxes=annotation.bboxes(cam, cabinets),
             cids=[1]*len(cabinets)
         )
+    
+    def post_anim(anim):
+        nonlocal cabinets
+        scene.remove_objects()
+        cabinets = None
 
     # Random seed worker
     np.random.seed(btargs.btseed)
@@ -35,12 +41,14 @@ def main():
     # Setup default image rendering
     cam = btb.Camera()
     off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    off.set_render_style(shading='MATERIAL', overlays=False)
+    #off.set_render_style(shading='RENDERED', overlays=False)
+    off.set_render_style(shading='SOLID', overlays=False)
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
-    anim.pre_frame.add(pre_frame)
-    anim.post_frame.add(post_frame, off, pub, anim, cam)    
-    anim.play(num_episodes=-1)
+    anim.pre_animation.add(pre_anim)
+    anim.post_frame.add(post_frame, off, pub, anim, cam)
+    anim.post_animation.add(post_anim, anim)
+    anim.play(use_animation=False)
 
 main()

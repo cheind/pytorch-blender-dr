@@ -67,8 +67,11 @@ def create_conveyor(collection):
     bpy.ops.object.empty_add(type='ARROWS', location=(0,0,0))    
     conveyor = bpy.context.active_object
     conveyor.name = 'Conveyor'
-    collection.objects.link(conveyor)
-    SCN.collection.objects.unlink(conveyor) 
+    try:
+        collection.objects.link(conveyor)
+        SCN.collection.objects.unlink(conveyor) 
+    except RuntimeError:
+        pass
     return conveyor
 
 def setup_animation(conveyor, conveyor_pos, **anim_props):
@@ -79,27 +82,28 @@ def setup_animation(conveyor, conveyor_pos, **anim_props):
     drvForward.driver.expression = f'frame*{speed}'
     
     # For the jiggle we need to register a custom driver function
-    jigglefac = anim_props.get("conveyor_jiggle_factor", 0.1)
+    jigglefac = anim_props.get("conveyor_jiggle_factor", 0.05)
     jiggle = lambda: np.random.random()*jigglefac
     bpy.app.driver_namespace["jiggle"] = jiggle
     
     drvJiggle = conveyor.driver_add('location', 2)
     drvJiggle.driver.expression = f'jiggle()'
 
-    # Set animation range.
-    SCN.frame_start=0
-    SCN.frame_end = int(abs(conveyor_pos)/speed)
-
+    # Set animation range. TODO pytorch-blender does not
+    # support different animation lengths.
+    #SCN.frame_start=0
+    #SCN.frame_end = int(abs(conveyor_pos)/speed)
 
 def create_scene(num_objects=10, **kwargs):
     # Create collection to place generate generated objects into
-    gcoll = SCN.collection.children.get('Generated')
-    assert gcoll is None, 'Generated collection already exists, delete first.'
-    
-    gcoll = bpy.data.collections.new('Generated')
-    SCN.collection.children.link(gcoll)
-    
+    gcoll = SCN.collection.children['Generated']
     conveyor = create_conveyor(gcoll)
     objs, conveyor_pos = create_objects(conveyor, **kwargs)
     setup_animation(conveyor, conveyor_pos, **kwargs)
     return objs
+
+def remove_objects():
+    coll = SCN.collection.children['Generated']
+    for o in coll.objects:
+        bpy.data.objects.remove(o, do_unlink=True)
+    bpy.ops.outliner.orphans_purge()
