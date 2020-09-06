@@ -17,7 +17,7 @@ n_max: 10
 augment: False
 
 # Training
-num_epochs: 10
+num_epochs: 1
 batch_size: 1
 lr: 1.25e-4
 val_interval: 5
