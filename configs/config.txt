@@ -15,6 +15,7 @@ w: 512
 num_classes: 1
 n_max: 10
 augment: False
+data_folder: ./data
 
 # Training
 num_epochs: 1
