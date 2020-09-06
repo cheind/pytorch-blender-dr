@@ -174,9 +174,8 @@ class Transformation:
         cpt_mask = np.zeros((self.n_max,), dtype=np.uint8)
         cpt_mask[:len_valid] = 1
 
-        # TODO: divide by 4 -> low res,
         wh = np.zeros((self.n_max, 2), dtype=np.float32)
-        wh[:len_valid, :] = bboxes[:, 2:-1]
+        wh[:len_valid, :] = bboxes[:, 2:-1] / self.down_ratio
 
         cls_id = np.zeros((self.n_max,), dtype=np.uint8)
         # the bbox labels help to reassign the correct classes
@@ -266,7 +265,7 @@ def main(opt):
             # Otherwise we replay from file.
             name = os.path.basename(opt.scene)
             ds = btt.FileDataset(f'./data/record_{name}', item_transform=item_transform)
-            shuffle = True
+            shuffle = False
 
         # try to over fit on a single example
         ds = data.Subset(ds, indices=[0])
