@@ -29,14 +29,14 @@ def main():
     parser = argparse.ArgumentParser('Record blendtorch t-less datasets')
     parser.add_argument('--num-items', default=512, type=int)
     parser.add_argument('--num-instances', default=4, type=int)
-    parser.add_argument('--prefix-name', default='tless')    
     parser.add_argument('--json-config', help='JSON configuration file')
+    parser.add_argument('scene', help='Scene to generate [tless|kitchen]')
     args = parser.parse_args()
 
     # Define how we want to launch Blender
     launch_args = dict(
-        scene=Path(__file__).parent/'blender'/'tless.blend',
-        script=Path(__file__).parent/'blender'/'tless.blend.py',
+        scene=Path(__file__).parent/'blender'/args.scene/f'{args.scene}.blend',
+        script=Path(__file__).parent/'blender'/args.scene/f'{args.scene}.blend.py',
         num_instances=args.num_instances, 
         named_sockets=['DATA'],
     )
@@ -51,13 +51,13 @@ def main():
     with btt.BlenderLauncher(**launch_args) as bl:
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
-        ds = btt.RemoteIterableDataset(addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.prefix_name}')
+        ds = btt.RemoteIterableDataset(addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.scene}')
         dl = data.DataLoader(ds, batch_size=4, num_workers=4) # bug when num_workers = 4, the batch size is only one then??
         iterate(dl)
 
     if args.json_config:
         from shutil import copyfile
-        copyfile(args.json_config, f'tmp/{args.prefix_name}.json')
+        copyfile(args.json_config, f'tmp/{args.scene}.json')
 
 if __name__ == '__main__':
     main()
