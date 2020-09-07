@@ -9,7 +9,7 @@ record: False
 
 # Inference
 thres: 0.3
-k: 20
+k: 10
 
 # Data
 mean: [0.485, 0.456, 0.406]
@@ -22,7 +22,7 @@ augment: False
 data_folder: ./data
 
 # Training
-num_epochs: 1
+num_epochs: 100
 batch_size: 1
 lr: 1.25e-4
 val_interval: 5

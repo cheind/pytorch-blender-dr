@@ -9,6 +9,8 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer):
 
     meter = MetricMeter()
 
+    tag = "Loss/Train"
+
     for i, batch in enumerate(dataloader):
         batch = {k: v.to(device=device) for k, v in batch.items()}
 
@@ -16,7 +18,8 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer):
         loss, loss_dict = loss_fn(output, batch)
 
         meter.update(loss_dict)
-        print("Epoch:", epoch, str(meter))
+        meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
+        # print("Epoch:", epoch, str(meter))
 
         optimizer.zero_grad()
         loss.backward()
@@ -30,6 +33,8 @@ def eval(epoch, model, dataloader, device, loss_fn, writer):
 
     meter = MetricMeter()
 
+    tag = "Loss/Val"
+
     for i, batch in enumerate(dataloader):
         batch = {k: v.to(device=device) for k, v in batch.items()}
 
@@ -37,4 +42,5 @@ def eval(epoch, model, dataloader, device, loss_fn, writer):
         _, loss_dict = loss_fn(output, batch)
 
         meter.update(loss_dict)
-        print("Epoch:", epoch, str(meter))
+        meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
+        # print("Epoch:", epoch, str(meter))

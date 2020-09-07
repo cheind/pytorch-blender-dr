@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 import albumentations as A
 import numpy as np
+import logging
 import os
 
 import torch
@@ -15,6 +16,7 @@ from .utils import Config
 from .train import train, eval
 from .loss import CenterLoss
 from .model import get_model
+from .visu import render
 
 
 class Transformation:
@@ -81,7 +83,7 @@ class Transformation:
         h, w = shape[:2]
 
         if n == 0:
-            return np.zeros((num_classes, h, w), dtype=np.float32)
+            return np.zeros((1, h, w), dtype=np.float32)  # np.zeros((num_classes, h, w), dtype=np.float32)
 
         if not bleed:
             wh = np.asarray([w - 1, h - 1])[None, :]
@@ -94,7 +96,7 @@ class Transformation:
         # reshape grid to 1 x 2 x h x w
         grid = grid.reshape((1, 2, h, w))
         # reshape xy to n x 2 x 1 x 1
-        xy = xy.reshape(n, 2, 1, 1)
+        xy = xy.reshape((n, 2, 1, 1))
         # compute squared distances to joints
         d = ((grid - xy) ** 2).sum(1)
         # compute gaussian
@@ -292,7 +294,6 @@ def main(opt):
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
         model = get_model(heads)
 
-
         # t = torch.randn(4, 3, 512, 512)
         # out = model(t)
         # print(out["cpt_hm"].shape,
@@ -314,11 +315,14 @@ def main(opt):
 
         writer = SummaryWriter()  # save into ./runs folder
 
+        # tensorboard --logdir=runs
+
         for epoch in range(1, opt.num_epochs + 1):
+            logging.info(f"Inside trainings loop at epoch: {epoch}")
             train(epoch, model, optimizer, dl, device, loss_fn, writer)
 
-            #if epoch % opt.val_interval == 0:
-                #eval(epoch, model, dl, device, loss_fn, writer)
+            if epoch % opt.val_interval == 0:
+                eval(epoch, model, dl, device, loss_fn, writer)
 
         PATH = "./models/center_net.pth"
         torch.save({
