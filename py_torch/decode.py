@@ -53,9 +53,9 @@ def _topk(heat: torch.Tensor, k):
 
     batch, cat, height, width = heat.size()
     topk_scores, topk_inds = torch.topk(heat.view(batch, -1), k)
-    topk_cids = (topk_inds / (height * width)).int()
+    topk_cids = torch.true_divide(topk_inds, (height * width)).int()
     topk_inds = topk_inds % (height * width)
-    topk_ys = (topk_inds / width).int().float()
+    topk_ys = torch.true_divide(topk_inds, width).int().float()
     topk_xs = (topk_inds % width).int().float()
     return topk_scores, topk_inds, topk_cids, topk_ys, topk_xs
 
@@ -141,6 +141,11 @@ def decode(out, k):
     cpt_off = out["cpt_off"]
     wh = out["wh"]
 
+    import matplotlib.pyplot as plt
+    hm = cpt_hm.detach().clone()
+    plt.imshow(1 - hm.squeeze(0).permute(1, 2, 0).numpy(), cmap="Greys")
+    plt.show()
+
     b = cpt_hm.size(0)
     cpt_hm = _nms(cpt_hm)  # b x c x h x w
 
@@ -150,8 +155,8 @@ def decode(out, k):
     topk_cpt_off = _transpose_and_gather_feat(cpt_off, topk_inds)  # b x k x 2
 
     # each of shape: b x k
-    topk_xs = topk_xs.view(b, k, 1) + cpt_off[..., 0:1]
-    topk_ys = topk_ys.view(b, k, 1) + cpt_off[..., 1:2]
+    topk_xs = topk_xs.view(b, k, 1) + topk_cpt_off[..., 0:1]
+    topk_ys = topk_ys.view(b, k, 1) + topk_cpt_off[..., 1:2]
 
     topk_wh = _transpose_and_gather_feat(wh, topk_inds)  # b x k x 2
     topk_cids = topk_cids.view(b, k, 1).float()  # b x k x 1
@@ -174,4 +179,14 @@ def decode(out, k):
 
 
 def filter_dets(dets, thres):
-    pass
+    """
+    Parameters
+    ----------
+    dets: b x k x 6
+    thres: scalar
+    """
+    b = dets.size(0)
+    scores = dets[..., 4]  # b x k
+    mask = scores >= thres  # b x k
+    filtered_dets = dets[mask]  # b * k_filtered x 6
+    return filtered_dets.view(b, -1, 6)

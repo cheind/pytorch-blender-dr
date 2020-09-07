@@ -9,6 +9,7 @@ import os
 import torch
 from torch import optim
 from torch.utils import data
+from torch.utils.tensorboard import SummaryWriter
 
 from blendtorch import btt
 
@@ -16,6 +17,7 @@ from .utils import Config
 from .train import train, eval
 from .loss import CenterLoss
 from .model import get_model
+from .decode import decode, filter_dets
 from .visu import render
 
 
@@ -25,7 +27,7 @@ class Transformation:
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
         self.num_classes = opt.num_classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
-        self.down_ratio = 4  # => low resolution 128 x 128
+        self.down_ratio = opt.down_ratio  # => low resolution 128 x 128
         # ImageNet stats
         self.mean = opt.mean
         self.std = opt.std
@@ -275,18 +277,13 @@ def main(opt):
         # Setup DataLoader and iterate
         dl = data.DataLoader(ds, batch_size=opt.batch_size, num_workers=opt.worker_instances, shuffle=shuffle)
 
-        # batch = next(iter(dl))
-        # for k, v in batch.items():
-        #     print(k, v.shape)
-        #
-        # plt.imshow(batch["cpt_hm"].squeeze(0).permute(1, 2, 0).numpy())
-        # plt.show()
-        # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
-        # plt.show()
-
         if opt.record:
             print("Generating images of the recorded data...")
             iterate(dl)
+
+        # batch = next(iter(dl))
+        # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
+        # plt.show()
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -294,55 +291,80 @@ def main(opt):
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
         model = get_model(heads)
 
-        # t = torch.randn(4, 3, 512, 512)
-        # out = model(t)
-        # print(out["cpt_hm"].shape,
-        #       out["cpt_off"].shape,
-        #       out["wh"].shape)
-        #
-        #
-        # output, batch
-
         loss_fn = CenterLoss()
-
-        # batch = next(iter(dl))
-        # out = model(batch["image"])
-        # test_loss = loss_fn(out, batch)
 
         optimizer = optim.Adam(model.parameters(), opt.lr)
 
-        from torch.utils.tensorboard import SummaryWriter
+        if opt.test:  # do inference
+            checkpoint = torch.load(opt.model_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+
+            model.eval()
+
+            batch = next(iter(dl))
+
+            # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
+            # plt.show()
+
+            with torch.no_grad():
+                out = model(batch["image"])
+                loss, loss_dict = loss_fn(out, batch)
+                print(loss_dict)
+
+                dets = decode(out, opt.k)  # b x k x 6
+                dets = filter_dets(dets, opt.thres)
+
+                # TODO heat map is inverted!!
+                image = batch["image"]
+                dets[:4] = dets[:4] * opt.down_ratio
+                render(image, dets, show=True, save=False, path=None)
+
+            return  # exit
+
+        if opt.resume:  # resume training
+            checkpoint = torch.load(opt.model_path)
+            model.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            best_loss = checkpoint["loss"]
+            start_epoch = checkpoint["epoch"]
+        else:
+            best_loss = 10 ** 8
+            start_epoch = 1
 
         writer = SummaryWriter()  # save into ./runs folder
 
         # tensorboard --logdir=runs
 
-        for epoch in range(1, opt.num_epochs + 1):
+        for epoch in range(start_epoch, opt.num_epochs + 1):
             logging.info(f"Inside trainings loop at epoch: {epoch}")
             train(epoch, model, optimizer, dl, device, loss_fn, writer)
 
             if epoch % opt.val_interval == 0:
-                eval(epoch, model, dl, device, loss_fn, writer)
+                meter = eval(epoch, model, dl, device, loss_fn, writer)
 
-        PATH = "./models/center_net.pth"
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, PATH)
+                if meter["total_loss"] <= best_loss:
+                    best_loss = meter["total_loss"]
+                    torch.save({
+                        'loss': best_loss,
+                        'epoch': epoch,
+                        'model_state_dict': model.state_dict(),
+                        'optimizer_state_dict': optimizer.state_dict(),
+                    }, f"./models/best_model.pth")
 
-        checkpoint = torch.load(PATH)
-        heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
-        model = get_model(heads)
-        model.load_state_dict(checkpoint['model_state_dict'])
-        optimizer = optim.Adam(model.parameters(), opt.lr)
-        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-
+        # after training visualize output
         model.eval()
-
         batch = next(iter(dl))
         out = model(batch["image"])
-        test_loss = loss_fn(out, batch)
-        print(test_loss)
+        loss, loss_dict = loss_fn(out, batch)
+        print(loss_dict)
+
+        dets = decode(out, opt.k)  # b x k x 6
+        dets = filter_dets(dets, opt.thres)
+
+        image = batch["image"]
+        dets[:4] = dets[:4] * opt.down_ratio
+        render(image, dets, show=True, save=True, path="./data/decoded_0.png")
 
 
 if __name__ == '__main__':

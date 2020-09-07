@@ -34,7 +34,3 @@ def render(image, detections, show=True, save=False, path=None):
         plt.show()
 
     plt.close(fig)
-
-
-if __name__ == "__main__":
-

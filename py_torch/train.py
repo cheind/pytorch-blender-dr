@@ -19,11 +19,20 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer):
 
         meter.update(loss_dict)
         meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
-        # print("Epoch:", epoch, str(meter))
 
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+    }, "./models/model_last.pth")
+
+    # torch.save({
+    #     'model_state_dict': model.state_dict(),
+    #     'optimizer_state_dict': optimizer.state_dict(),
+    # }, f"./models/model_{epoch}.pth")
 
 
 @torch.no_grad()
@@ -43,4 +52,5 @@ def eval(epoch, model, dataloader, device, loss_fn, writer):
 
         meter.update(loss_dict)
         meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
-        # print("Epoch:", epoch, str(meter))
+
+    return meter
