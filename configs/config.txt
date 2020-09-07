@@ -7,6 +7,10 @@ replay: True
 # Record raw blender data
 record: False
 
+# Inference
+thres: 0.3
+k: 20
+
 # Data
 mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]

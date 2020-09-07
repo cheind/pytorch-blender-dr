@@ -310,11 +310,15 @@ def main(opt):
 
         optimizer = optim.Adam(model.parameters(), opt.lr)
 
+        from torch.utils.tensorboard import SummaryWriter
+
+        writer = SummaryWriter()  # save into ./runs folder
+
         for epoch in range(1, opt.num_epochs + 1):
-            train(epoch, model, optimizer, dl, device, loss_fn)
+            train(epoch, model, optimizer, dl, device, loss_fn, writer)
 
             #if epoch % opt.val_interval == 0:
-                #eval(epoch, model, dl, device, loss_fn)
+                #eval(epoch, model, dl, device, loss_fn, writer)
 
         PATH = "./models/center_net.pth"
         torch.save({

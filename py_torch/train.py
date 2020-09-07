@@ -3,7 +3,7 @@ import torch
 from .utils import MetricMeter
 
 
-def train(epoch, model, optimizer, dataloader, device, loss_fn):
+def train(epoch, model, optimizer, dataloader, device, loss_fn, writer):
     model.to(device=device)
     model.train()
 
@@ -24,7 +24,7 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn):
 
 
 @torch.no_grad()
-def eval(epoch, model, dataloader, device, loss_fn):
+def eval(epoch, model, dataloader, device, loss_fn, writer):
     model.to(device=device)
     model.train()
 
