@@ -42,7 +42,9 @@ def main():
     cam = btb.Camera()
     off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
     #off.set_render_style(shading='RENDERED', overlays=False)
-    off.set_render_style(shading='SOLID', overlays=False)
+    # You might want to set a cache limit for blender, so that image
+    # textures don't accumulate
+    off.set_render_style(shading='RENDERED', overlays=False) 
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
