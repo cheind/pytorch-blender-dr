@@ -54,7 +54,7 @@ class Transformation:
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
 
     def gen_map(self, shape, xy: np.ndarray,  # cids: np.ndarray, num_classes,
-                mask=None, sigma=4, cutoff=1e-3, normalize=False, bleed=True):
+                mask=None, sigma=2, cutoff=1e-3, normalize=False, bleed=True):
         """
         Generates a single belief map of 'shape' for each point in 'xy'.
 
@@ -114,7 +114,9 @@ class Transformation:
             # set the invalid center point maps to all zero
             b *= mask[:, None, None]  # n x h x w
 
-        return b.max(0, keepdims=True)  # 1 x h x w
+        b = b.max(0, keepdims=True)  # 1 x h x w
+        b[b >= 0.95] = 1
+        return b
 
     def item_transform(self, item):
         """
@@ -200,6 +202,13 @@ class Transformation:
         cpt_off[:len_valid] = (cpt - cpt_int)[:len_valid]
 
         cpt_hm = self.gen_map((hl, wl), cpt, mask=cpt_mask)  # 1 x hl x wl
+
+        # print("cpt_max min", np.max(cpt_hm), np.min(cpt_hm))
+        #
+        # import matplotlib.pyplot as plt
+        # plt.title("cpt_hm in item_transform")
+        # plt.imshow(cpt_hm.transpose((1, 2, 0)), cmap="Greys")
+        # plt.show()
 
         item = {
             "image": image,
@@ -302,20 +311,15 @@ def main(opt):
 
             model.eval()
 
-            batch = next(iter(dl))
-
-            # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
-            # plt.show()
-
+            batch = next(iter(dl))  # batch size of 1!!
             with torch.no_grad():
                 out = model(batch["image"])
-                loss, loss_dict = loss_fn(out, batch)
-                print(loss_dict)
+                # loss, loss_dict = loss_fn(out, batch)
+                # print(loss_dict)
 
                 dets = decode(out, opt.k)  # b x k x 6
                 dets = filter_dets(dets, opt.thres)
 
-                # TODO heat map is inverted!!
                 image = batch["image"]
                 dets[:4] = dets[:4] * opt.down_ratio
                 render(image, dets, show=True, save=False, path=None)
@@ -338,7 +342,22 @@ def main(opt):
 
         for epoch in range(start_epoch, opt.num_epochs + 1):
             logging.info(f"Inside trainings loop at epoch: {epoch}")
-            train(epoch, model, optimizer, dl, device, loss_fn, writer)
+
+            meter = train(epoch, model, optimizer, dl, device, loss_fn, writer)
+            torch.save({
+                'loss': meter["total_loss"],
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+            }, "./models/model_last.pth")
+
+            if epoch % opt.save_interval == 0:
+                torch.save({
+                    'loss': meter["total_loss"],
+                    'epoch': epoch,
+                    'model_state_dict': model.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                }, f"./models/model_{epoch}.pth")
 
             if epoch % opt.val_interval == 0:
                 meter = eval(epoch, model, dl, device, loss_fn, writer)

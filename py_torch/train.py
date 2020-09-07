@@ -24,15 +24,7 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer):
         loss.backward()
         optimizer.step()
 
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-    }, "./models/model_last.pth")
-
-    # torch.save({
-    #     'model_state_dict': model.state_dict(),
-    #     'optimizer_state_dict': optimizer.state_dict(),
-    # }, f"./models/model_{epoch}.pth")
+    return meter
 
 
 @torch.no_grad()

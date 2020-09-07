@@ -184,10 +184,10 @@ class CenterLoss(nn.Module):
         """
         total_loss = 0
         # apply activation function
-        output["cpt_hm"] = _sigmoid(output["cpt_hm"])
+        cpt_hm = _sigmoid(output["cpt_hm"])
 
         # calculate the loss on the center point heat map
-        cpt_hm_loss = self.crit_hm(output["cpt_hm"], batch["cpt_hm"])
+        cpt_hm_loss = self.crit_hm(cpt_hm, batch["cpt_hm"])
         total_loss += cpt_hm_loss
 
         # calculate the loss of the center point offsets

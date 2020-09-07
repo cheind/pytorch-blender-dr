@@ -7,11 +7,13 @@ replay: True
 # Record raw blender data
 record: False
 
+# Relevant if test: True or resume: True
+model_path: ./models/model_new_loss.pth
+
 # Inference
 thres: 0.3
 k: 10
-test: True
-model_path: ./models/model_last_100.pth
+test: False
 
 # Data
 down_ratio: 4
@@ -26,7 +28,7 @@ data_folder: ./data
 
 # Training
 resume: False
-num_epochs: 100
+num_epochs: 10
 batch_size: 1
 lr: 1.25e-4
 val_interval: 500

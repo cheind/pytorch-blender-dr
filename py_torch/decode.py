@@ -141,10 +141,11 @@ def decode(out, k):
     cpt_off = out["cpt_off"]
     wh = out["wh"]
 
-    import matplotlib.pyplot as plt
-    hm = cpt_hm.detach().clone()
-    plt.imshow(1 - hm.squeeze(0).permute(1, 2, 0).numpy(), cmap="Greys")
-    plt.show()
+    # import matplotlib.pyplot as plt
+    # plt.title("cpt_hm in decode")
+    # plt.imshow(cpt_hm.detach().clone().squeeze(0).permute(1, 2, 0).numpy(),
+    #            cmap="Greys", vmin=0, vmax=1.0)
+    # plt.show()
 
     b = cpt_hm.size(0)
     cpt_hm = _nms(cpt_hm)  # b x c x h x w
