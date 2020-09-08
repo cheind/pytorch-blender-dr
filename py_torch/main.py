@@ -5,12 +5,15 @@ import albumentations as A
 import numpy as np
 import logging
 import os
+import sys
 
 import torch
 from torch import optim
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
 
+# git clone https://github.com/cheind/pytorch-blender.git <DST>
+# pip install -e <DST>/pkg_pytorch
 from blendtorch import btt
 
 from .utils import Config
@@ -52,7 +55,7 @@ class Transformation:
         )
 
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
-
+        
     def gen_map(self, shape, xy: np.ndarray,  # cids: np.ndarray, num_classes,
                 mask=None, sigma=2, cutoff=1e-3, normalize=False, bleed=True):
         """
@@ -115,6 +118,11 @@ class Transformation:
             b *= mask[:, None, None]  # n x h x w
 
         b = b.max(0, keepdims=True)  # 1 x h x w
+
+        # focal loss is different if targets aren't exactly 1
+        # pixels are rectangles => if floating point coordinate
+        # isn't exactly on the pixel center => not exactly 1 at 
+        # the discrete positions!! solution: broaden peak
         b[b >= 0.95] = 1
         return b
 
@@ -142,9 +150,6 @@ class Transformation:
 
         h, w = image.shape[:2]
 
-        # bboxes = np.array([[500, 400, 40, 12]], dtype=np.float32).repeat(9, 0)
-        # bboxes = np.concatenate((bboxes, np.array([[200, 200, 50, 50]])))
-
         # adjust bboxes to pass initial - check_bbox(bbox) - call
         # from the albumentations package
         # library can't deal with bbox corners outside of the image
@@ -155,7 +160,10 @@ class Transformation:
         y[y > h] = h
         bw[x + bw > w] = w - x[x + bw > w]
         bh[y + bh > h] = h - y[y + bh > h]
-        bboxes = np.concatenate((x, y, bw, bh), axis=-1)
+
+        mask = np.logical_or(bw == 0, bh == 0).reshape(-1)  # n,
+        bboxes = np.concatenate((x, y, bw, bh), axis=-1)  # n x 4
+        bboxes = bboxes[~mask]
         # note: further processing is done by albumentations, bboxes
         # are dropped when not satisfying min. area or visibility!
 
@@ -166,8 +174,8 @@ class Transformation:
         transformed = self.transform_fn(image=image, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
         image = image.transpose((2, 0, 1))  # 3 x h x w
-        bboxes = np.array(transformed["bboxes"], dtype=np.float32)
-
+        bboxes = np.array(transformed["bboxes"], dtype=np.float32).reshape(-1, 5)
+        
         # bboxes can be dropped
         len_valid = len(bboxes)
 
@@ -180,6 +188,7 @@ class Transformation:
         cpt_mask = np.zeros((self.n_max,), dtype=np.uint8)
         cpt_mask[:len_valid] = 1
 
+        # LOW RESOLUTION bboxes
         wh = np.zeros((self.n_max, 2), dtype=np.float32)
         wh[:len_valid, :] = bboxes[:, 2:-1] / self.down_ratio
 
@@ -202,13 +211,6 @@ class Transformation:
         cpt_off[:len_valid] = (cpt - cpt_int)[:len_valid]
 
         cpt_hm = self.gen_map((hl, wl), cpt, mask=cpt_mask)  # 1 x hl x wl
-
-        # print("cpt_max min", np.max(cpt_hm), np.min(cpt_hm))
-        #
-        # import matplotlib.pyplot as plt
-        # plt.title("cpt_hm in item_transform")
-        # plt.imshow(cpt_hm.transpose((1, 2, 0)), cmap="Greys")
-        # plt.show()
 
         item = {
             "image": image,
@@ -272,29 +274,36 @@ def main(opt):
 
             # Setup raw recording if desired
             if opt.record:
-                name = os.path.basename(opt.scene)
-                ds.enable_recording(f'./data/record_{name}')
+                ds.enable_recording(opt.record_path)
         else:
             # Otherwise we replay from file.
-            name = os.path.basename(opt.scene)
-            ds = btt.FileDataset(f'./data/record_{name}', item_transform=item_transform)
+            ds = btt.FileDataset(opt.record_path, item_transform=item_transform)
             shuffle = False
 
-        # try to over fit on a single example
-        ds = data.Subset(ds, indices=[0])
+        logging.info(f"Num. of samples: {len(ds)}")
+        logging.info(f"Batch size: {opt.batch_size}")
 
-        # Setup DataLoader and iterate
-        dl = data.DataLoader(ds, batch_size=opt.batch_size, num_workers=opt.worker_instances, shuffle=shuffle)
+        # Setup Dataset: train, validation split
+        split = int(0.9 * len(ds))
+        logging.info(f"Split data set at sample nr. {split}")
+        train_ds = data.Subset(ds, indices=list(range(split)))
+        val_ds = data.Subset(ds, indices=list(range(split, len(ds))))
+
+        logging.info(f"Training data size: {len(train_ds)}")
+        logging.info(f"Validation data size: {len(val_ds)}")
+
+        # Setup DataLoader: train, validation split
+        train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
+            num_workers=opt.worker_instances, shuffle=False)
+        val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
+            num_workers=opt.worker_instances, shuffle=False)
 
         if opt.record:
             print("Generating images of the recorded data...")
             iterate(dl)
 
-        # batch = next(iter(dl))
-        # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
-        # plt.show()
-
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        logging.info(f"On device: {device}")
 
         # heads - head_name: num. channels of model
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
@@ -309,20 +318,26 @@ def main(opt):
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
 
+            model.to(device=device)
             model.eval()
 
-            batch = next(iter(dl))  # batch size of 1!!
+            batch = next(iter(val_dl))  
+            batch = {k: v.to(device=device) for k, v in batch.items()}
+            # batch size of 1
+            assert opt.batch_size == 1
+
             with torch.no_grad():
                 out = model(batch["image"])
-                # loss, loss_dict = loss_fn(out, batch)
-                # print(loss_dict)
+                loss, loss_dict = loss_fn(out, batch)
+                print(loss_dict)
 
                 dets = decode(out, opt.k)  # b x k x 6
                 dets = filter_dets(dets, opt.thres)
 
                 image = batch["image"]
-                dets[:4] = dets[:4] * opt.down_ratio
-                render(image, dets, show=True, save=False, path=None)
+                dets[..., :4] = dets[..., :4] * opt.down_ratio
+                render(image, dets, opt, show=False, save=True, 
+                    path="./data/test_det.png")
 
             return  # exit
 
@@ -331,21 +346,25 @@ def main(opt):
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             best_loss = checkpoint["loss"]
-            start_epoch = checkpoint["epoch"]
+            start_epoch = checkpoint["epoch"] + 1
         else:
             best_loss = 10 ** 8
             start_epoch = 1
 
         writer = SummaryWriter()  # save into ./runs folder
 
-        # tensorboard --logdir=runs
+        # tensorboard --logdir=runs --bind_all
+        # bind_all -> when training on e.g. gpu server
 
         for epoch in range(start_epoch, opt.num_epochs + 1):
-            logging.info(f"Inside trainings loop at epoch: {epoch}")
+            meter = train(epoch, model, optimizer, train_dl, 
+                device, loss_fn, writer)
+            
+            total_loss = meter.get_avg("total_loss")
+            logging.info(f"Loss: {total_loss} at epoch: {epoch} / {opt.num_epochs}")
 
-            meter = train(epoch, model, optimizer, dl, device, loss_fn, writer)
             torch.save({
-                'loss': meter["total_loss"],
+                'loss': meter.get_avg("total_loss"),
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -353,17 +372,17 @@ def main(opt):
 
             if epoch % opt.save_interval == 0:
                 torch.save({
-                    'loss': meter["total_loss"],
+                    'loss': meter.get_avg("total_loss"),
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                 }, f"./models/model_{epoch}.pth")
 
             if epoch % opt.val_interval == 0:
-                meter = eval(epoch, model, dl, device, loss_fn, writer)
+                meter = eval(epoch, model, val_dl, device, loss_fn, writer)
 
-                if meter["total_loss"] <= best_loss:
-                    best_loss = meter["total_loss"]
+                if meter.get_avg("total_loss") <= best_loss:
+                    best_loss = meter.get_avg("total_loss")
                     torch.save({
                         'loss': best_loss,
                         'epoch': epoch,
@@ -371,19 +390,8 @@ def main(opt):
                         'optimizer_state_dict': optimizer.state_dict(),
                     }, f"./models/best_model.pth")
 
-        # after training visualize output
-        model.eval()
-        batch = next(iter(dl))
-        out = model(batch["image"])
-        loss, loss_dict = loss_fn(out, batch)
-        print(loss_dict)
-
-        dets = decode(out, opt.k)  # b x k x 6
-        dets = filter_dets(dets, opt.thres)
-
-        image = batch["image"]
-        dets[:4] = dets[:4] * opt.down_ratio
-        render(image, dets, show=True, save=True, path="./data/decoded_0.png")
+        logging.info("Finished training!")
+        return  # exit
 
 
 if __name__ == '__main__':
@@ -393,5 +401,8 @@ if __name__ == '__main__':
 
     opt = Config("./configs/config.txt")
     print(opt)
+
+    opt.mean = np.array(opt.mean, np.float32) 
+    opt.std = np.array(opt.std, np.float32)
 
     main(opt)

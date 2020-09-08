@@ -60,12 +60,22 @@ class MetricMeter:
                 v = v.item()
             self.meters[k].update(v)
 
-    def to_writer(self, writer, tag, n_iter):
+    """ def to_writer(self, writer, tag, n_iter):
         for name, meter in self.meters.items():
             writer.add_scalars(f"{tag}/{name}", {
                 "val": meter.val,
                 "avg": meter.avg,
-            }, n_iter)
+            }, n_iter) """
+
+    def to_writer(self, writer, tag, n_iter):
+        for name, meter in self.meters.items():
+            writer.add_scalar(f"{tag}/{name}", meter.avg, n_iter)
+
+    def get_avg(self, tag):
+        return self.meters[tag].avg
+
+    def get_val(self, tag):
+        return self.meters[tag].val
 
     def __str__(self):
         output_str = []

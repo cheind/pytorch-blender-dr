@@ -141,17 +141,31 @@ def decode(out, k):
     cpt_off = out["cpt_off"]
     wh = out["wh"]
 
-    # import matplotlib.pyplot as plt
-    # plt.title("cpt_hm in decode")
-    # plt.imshow(cpt_hm.detach().clone().squeeze(0).permute(1, 2, 0).numpy(),
-    #            cmap="Greys", vmin=0, vmax=1.0)
-    # plt.show()
+    """ import matplotlib.pyplot as plt
+    plt.title("cpt_hm in decode")
+    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
+        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
+    plt.savefig("debug/debug01.png") """
 
     b = cpt_hm.size(0)
     cpt_hm = _nms(cpt_hm)  # b x c x h x w
 
+    """ import matplotlib.pyplot as plt
+    plt.title("cpt_hm in decode post nms")
+    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
+        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
+    plt.savefig("debug/debug02.png") """
+
     # each of shape: b x k
     topk_scores, topk_inds, topk_cids, topk_ys, topk_xs = _topk(cpt_hm, k)
+
+    """ import matplotlib.pyplot as plt
+    plt.title("cpt_hm in decode post nms with topk")
+    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
+        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
+    plt.scatter(topk_xs.detach().clone().cpu(), 
+        topk_ys.detach().clone().cpu(), marker="x")
+    plt.savefig("debug/debug03.png") """
 
     topk_cpt_off = _transpose_and_gather_feat(cpt_off, topk_inds)  # b x k x 2
 
@@ -166,8 +180,8 @@ def decode(out, k):
     # bboxes, coco format: x, y, width, height; b x k x 4
     topk_bboxes = torch.cat([topk_xs - topk_wh[..., 0:1] / 2,
                              topk_ys - topk_wh[..., 1:2] / 2,
-                             topk_xs + topk_wh[..., 0:1] / 2,
-                             topk_ys + topk_wh[..., 1:2] / 2], dim=-1)
+                             topk_wh[..., 0:1],
+                             topk_wh[..., 1:2]], dim=-1)
     detections = torch.cat([
         topk_bboxes,
         topk_scores,
@@ -188,6 +202,7 @@ def filter_dets(dets, thres):
     """
     b = dets.size(0)
     scores = dets[..., 4]  # b x k
+    
     mask = scores >= thres  # b x k
     filtered_dets = dets[mask]  # b * k_filtered x 6
     return filtered_dets.view(b, -1, 6)

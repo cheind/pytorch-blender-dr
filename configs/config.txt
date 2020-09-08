@@ -5,15 +5,19 @@ scene: blender/tless
 replay: True
 
 # Record raw blender data
+record_path: /mnt/data/20200908_TLess/tless
 record: False
 
 # Relevant if test: True or resume: True
-model_path: ./models/model_new_loss.pth
+model_path: ./models/model_last.pth
 
 # Inference
-thres: 0.3
+thres: 0.6
 k: 10
 test: False
+
+# Real TlessRealDataset path
+real_path: /mnt/data/tless_real/test_primesense
 
 # Data
 down_ratio: 4
@@ -24,14 +28,14 @@ w: 512
 num_classes: 1
 n_max: 10
 augment: False
-data_folder: ./data
 
 # Training
 resume: False
-num_epochs: 10
-batch_size: 1
+num_epochs: 80
+batch_size: 16
 lr: 1.25e-4
-val_interval: 500
+val_interval: 5
+save_interval: 10
 
 # System
 blend_path: C:/Program Files/Blender Foundation/Blender 2.90

@@ -1,7 +1,8 @@
-from contextlib import ExitStack
-
 import albumentations as A
 import numpy as np
+from pathlib import Path
+import json
+import cv2
 import os
 
 import torch
@@ -9,20 +10,10 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils import data
 
-from blendtorch import btt
-
 from .utils import Config
 from .model import get_model
-from .decode import decode
+from .decode import decode, filter_dets
 from .visu import render
-
-
-"""
-RGB images -> data set: add padding, rescale to 512 x 512,
-normalize by ImageNet mean and std -> data loader feed 
-the model -> denormalize images, decode model output 
--> render the detections -> save detections
-"""
 
 
 class Transformation:
@@ -67,7 +58,6 @@ class Transformation:
 
         """
         image = item["image"]
-        gt_image = image.copy()  # h x w x 3
         bboxes = item['bboxes']
         cids = item["cids"]
 
@@ -93,85 +83,117 @@ class Transformation:
 
         transformed = self.transform_fn(image=image, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
+        h, w = image.shape[:2]  # rescaled image
+        right = self.w - w
+        bottom = self.h - h
+
+        image = cv2.copyMakeBorder(image, 0, bottom, 0, right, 
+            cv2.BORDER_CONSTANT, value=0)
         image = image.transpose((2, 0, 1))  # 3 x h x w
-        pad = (0, right, 0, bottom) 
 
         bboxes = np.array(transformed["bboxes"], dtype=np.float32)
-        cids = cids[bboxes[-1]]  # temporary labels for class id reassignment
+        cids = cids[bboxes[:, -1].astype(np.int32)]  # temporary labels for class id reassignment
         bboxes = bboxes[:, :-1]  # drop temporary labels
         # note: note some bboxes might be dropped, e.g. when to small
         # to be considered as valid!
 
         item = {
-            "image": image,
-            "gt": {
-                "image": gt_image,
-                "bboxes": bboxes,
-                "cids": cids,
-            },
+            "image": image,  # 3 x h x w 
+            "bboxes": bboxes,  # n x 4
+            "cids": cids,  # n,
         }
         return item
 
 
-class ImageDataSet(data.Dataset):
+class TLessRealDataset(data.Dataset):
+    """Provides access to images, bboxes and classids for TLess real dataset.
+    
+    Download dataset
+    https://bop.felk.cvut.cz/datasets/#T-LESS
+    http://ptak.felk.cvut.cz/6DB/public/bop_datasets/tless_test_primesense_bop19.zip
+    
+    Format description 
+    https://github.com/thodan/bop_toolkit/blob/master/docs/bop_datasets_format.md
+    """
 
-    def __init__(self, root: str):
-        super().__init__()
-
+    def __init__(self, basepath, item_transform=None):
+        self.basepath = Path(basepath)
+        self.item_transform = item_transform
+        assert self.basepath.exists()
+        
+        # 000001, 000002,...
+        self.all_rgbpaths = []
+        self.all_bboxes = []
+        self.all_clsids = []
+        
+        scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
+        for scenepath in scenes:
+            with open(scenepath / 'scene_gt.json', 'r') as fp:
+                scene_gt = json.loads(fp.read())
+            with open(scenepath / 'scene_gt_info.json', 'r') as fp:
+                scene_gt_info = json.loads(fp.read())
+                
+            for idx in scene_gt.keys():
+                rgbpath = scenepath / 'rgb' / f'{int(idx):06d}.png'
+                assert rgbpath.exists()
+                
+                clsids = [int(e['obj_id']) for e in scene_gt[idx]]
+                bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
+                
+                self.all_rgbpaths.append(rgbpath)
+                self.all_bboxes.append(np.array(bboxes))
+                self.all_clsids.append(np.array(clsids))
+                
     def __len__(self):
-        return len(self.files)
-
-    def __getitem__(self, index: int):
+        return len(self.all_rgbpaths)
+    
+    def __getitem__(self, index):
+        image = cv2.imread(str(self.all_rgbpaths[index]))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # item: bundle of per image bboxes and class ids
+        item = {
+            "image": image,  # np.ndarray, h x w x 3
+            "bboxes": self.all_bboxes[index],
+            "cids": self.all_clsids[index],
+            }
+        item = self.item_transform(item)
         return item
 
 
 def main(opt):
-    """
-    HOW TO GET THE CORRECT BBOXES / CENTER POINTS 
-    FROM THE 128 x 128 model output into the 
-    arbitrary shaped original input image (before 512 x 512)   
-    """
     transformation = Transformation(opt)
     item_transform = transformation.item_transform
 
-    with ExitStack() as es:
-        if not opt.replay:
-            # Load images from data folder
-            # TODO: create a dataset to infere on images 
-            ds = ImageDataSet(root=opt.data_folder)
-        else:
-            # Otherwise we replay from file.
-            name = os.path.basename(opt.scene)
-            ds = btt.FileDataset(f'./data/record_{name}', item_transform=item_transform)
-            shuffle = False
+    # Setup Dataset
+    ds = TLessRealDataset(opt.real_path, item_transform)
 
-        # try to over fit on a single example
-        ds = data.Subset(ds, indices=[0])
+    # Setup DataLoader
+    dl = data.DataLoader(ds, batch_size=1, num_workers=0, shuffle=False)
 
-        # Setup DataLoader and iterate
-        dl = data.DataLoader(ds, batch_size=opt.batch_size, num_workers=opt.worker_instances, shuffle=shuffle)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # batch = next(iter(dl))
-        # if opt.replay:
-        #   print(batch["gt"]["bboxes"])
-        #   print(batch["gt"]["cids"])
-        # plt.imshow(batch["image"].squeeze(0).permute(1, 2, 0).numpy())
-        # plt.show()
+    checkpoint = torch.load(opt.model_path)
+    heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
+    model = get_model(heads)
+    epoch = checkpoint["epoch"]
+    model.load_state_dict(checkpoint['model_state_dict'])
+    model.to(device=device)
+    model.eval()
+    logging.info(f"Loaded model from epoch: {epoch}")
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    batch = next(iter(dl))
+    batch = {k: v.to(device=device) for k, v in batch.items()}
 
-        PATH = "./models/center_net.pth"
-        torch.save({
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-        }, PATH)
+    out = model(batch["image"])
+    dets = decode(out, opt.k)  # b x k x 6
+    dets = filter_dets(dets, opt.thres)
+    logging.info("Decoded model output!")
 
-        checkpoint = torch.load(PATH)
-        heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
-        model = get_model(heads)
-        model.load_state_dict(checkpoint['model_state_dict'])
+    image = batch["image"]
+    dets[..., :4] = dets[..., :4] * opt.down_ratio
+    render(image, dets, opt, show=False, save=True, path="./debug/decoded.png")
 
-        model.eval()
+    return  # exit
 
 
 if __name__ == '__main__':
@@ -181,6 +203,9 @@ if __name__ == '__main__':
 
     opt = Config("./configs/config.txt")
     print(opt)
+
+    opt.mean = np.array(opt.mean, np.float32) 
+    opt.std = np.array(opt.std, np.float32)
 
     main(opt)
 
