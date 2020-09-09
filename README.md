@@ -1,5 +1,7 @@
 # pytorch-blender-dr
 
+Provides code to recreate our results on 2D object detection und keypoint detection using adaptive domain randomization. In particular, we show that training on massively randomized low-fidelity simulation generalizes to real world data.
+
 ## Two industrial use cases
 
 ### TLess - TextureLess Objects
