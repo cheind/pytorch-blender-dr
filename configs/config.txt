@@ -25,7 +25,7 @@ mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]
 h: 512
 w: 512
-num_classes: 1
+num_classes: 5
 n_max: 10
 augment: False
 
@@ -35,7 +35,7 @@ num_epochs: 80
 batch_size: 16
 lr: 1.25e-4
 val_interval: 5
-save_interval: 10
+save_interval: 20
 
 # System
 blend_path: C:/Program Files/Blender Foundation/Blender 2.90

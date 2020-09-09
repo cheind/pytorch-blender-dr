@@ -35,6 +35,17 @@ class Transformation:
         self.mean = opt.mean
         self.std = opt.std
 
+        # group classes to categories
+        cls_map = {
+            # left our label, right tless labels
+            0: [1, 2, 3, 4, 5], 
+            1: [5, 6, 7, 8, 9],
+            2: [10, 11, 12,],
+            3: [13, 14, 15, 16, 17, 18],
+            4: [19, 20, 21, 22, 23, 24],
+            5: [25, 26, 27, 28, 29, 30],
+        }
+
         transformations = [
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
