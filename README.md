@@ -14,7 +14,7 @@ Links
 TODO
 
 ## Generating data
-Requires [blendtorch](https://github.com/cheind/pytorch-blender) + Blender 2.9  installed. For occluder objects we use [supershape](https://github.com/cheind/supershape) accessible from within Blender.
+Requires [blendtorch](https://github.com/cheind/pytorch-blender) + Blender 2.9  installed. For occluder objects we use [this supershape](https://github.com/cheind/supershape) library, that needs to be accessible from within Blender.
 
 To generate data, run 
 ```
@@ -32,4 +32,8 @@ python record.py --help
 ``` 
 for more options.
 
+## Training
+TODO
 
+## Evaluation
+TODO
