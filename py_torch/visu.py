@@ -5,6 +5,20 @@ import numpy as np
 import logging
 
 
+# define rgb colors for bounding boxes
+# https://www.rapidtables.com/web/color/RGB_Color.html
+COLORS = [
+    [255, 102, 102],
+    [255, 178, 102],
+    [102, 255, 102],
+    [102, 255, 255],
+    [102, 102, 255],
+    [255, 102, 255],
+    [0, 102, 102],
+    [102, 51, 0],
+]
+
+
 def render(image, detections, opt, show=True, save=False, path=None, denormalize=True):
     """
     Render the given image with bounding boxes and optionally class ids.
@@ -28,18 +42,24 @@ def render(image, detections, opt, show=True, save=False, path=None, denormalize
     axs.set_axis_off()
     
     axs.imshow(image, origin='upper')
-    for det in detections[0]:
+    for i, det in enumerate(detections[0]):
         bbox = det[:4]
         score = det[4]
-        # cid = int(det[5])
+        cid = int(det[5])
+        col = COLORS[i]
         rect = patches.Rectangle(bbox[:2], bbox[2], bbox[3],
-                                 linewidth=2, edgecolor='r', facecolor='none')
+                                 linewidth=2, edgecolor=col, 
+                                 facecolor='none')
+        rect.set_path_effects([
+            path_effects.Stroke(linewidth=2, foreground="white"),
+            path_effects.Normal()
+        ])
         axs.add_patch(rect)
-        text = axs.text(bbox[0] + 10, bbox[1] + 10, # f"{cid:02d}; {score:.3f}",
-                        f"{score:.3f}",
-                        fontsize=14, color="white")
+        text = axs.text(bbox[0] + 10, bbox[1] + 10, f"{cid} {score:.3f}",
+                        #f"{score:.3f}",
+                        fontsize=12, color=col)
         text.set_path_effects([
-            path_effects.Stroke(linewidth=2, foreground='black'),
+            path_effects.Stroke(linewidth=2, foreground="white"),
             path_effects.Normal()
         ])
 

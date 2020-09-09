@@ -35,16 +35,16 @@ class Transformation:
         self.mean = opt.mean
         self.std = opt.std
 
-        # group classes to categories
-        cls_map = {
-            # left our label, right tless labels
-            0: [1, 2, 3, 4, 5], 
-            1: [5, 6, 7, 8, 9],
-            2: [10, 11, 12,],
-            3: [13, 14, 15, 16, 17, 18],
-            4: [19, 20, 21, 22, 23, 24],
-            5: [25, 26, 27, 28, 29, 30],
-        }
+        # group classes
+        groups = [
+            [1, 2, 3, 4], 
+            [5, 6, 7, 8, 9],
+            [10, 11, 12,],
+            [13, 14, 15, 16, 17, 18],
+            [19, 20, 21, 22, 23, 24],
+            [25, 26, 27, 28, 29, 30],
+        ]
+        self.map_cls = {k: v for v, group in enumerate(groups) for k in group}
 
         transformations = [
             A.ChannelShuffle(p=0.5),
@@ -61,14 +61,14 @@ class Transformation:
 
         bbox_params = A.BboxParams(
             format="coco",
-            min_area=100,  # < 100 pixels => drop bbox
-            min_visibility=0.2,  # < 20% of orig. vis. => drop bbox
+            min_area=50,  # < 100 pixels => drop bbox
+            min_visibility=0.5,  # < 20% of orig. vis. => drop bbox
         )
 
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
         
-    def gen_map(self, shape, xy: np.ndarray,  # cids: np.ndarray, num_classes,
-                mask=None, sigma=2, cutoff=1e-3, normalize=False, bleed=True):
+    def gen_map(self, shape, xy: np.ndarray, mask=None, sigma=2, cutoff=1e-3, 
+                normalize=False, bleed=True):
         """
         Generates a single belief map of 'shape' for each point in 'xy'.
 
@@ -78,10 +78,6 @@ class Transformation:
             h x w of image
         xy: n x 2
             n points with x, y coordinates (image coordinate system)
-        cids: n,
-            class ids
-        num_classes: scalar
-            num. of classes
         mask: n,
             zero-one mask to select points from xy
         sigma: scalar
@@ -96,10 +92,10 @@ class Transformation:
         belief map: 1 x h x w  # num_classes x h x w
         """
         n = xy.shape[0]
-        h, w = shape[:2]
+        h, w = shape[:2] 
 
         if n == 0:
-            return np.zeros((1, h, w), dtype=np.float32)  # np.zeros((num_classes, h, w), dtype=np.float32)
+            return np.zeros((1, h, w), dtype=np.float32)
 
         if not bleed:
             wh = np.asarray([w - 1, h - 1])[None, :]
@@ -207,6 +203,10 @@ class Transformation:
         # the bbox labels help to reassign the correct classes
         cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
 
+        for i, cid in enumerate(cls_id[:len_valid]):
+            # map class ids from e.g. 1 to 30 -> 0 to 5 
+            cls_id[i] = self.map_cls[cid]
+
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
         cpt = cpt / self.down_ratio
@@ -221,7 +221,14 @@ class Transformation:
         cpt_off = np.zeros((self.n_max, 2), dtype=np.float32)
         cpt_off[:len_valid] = (cpt - cpt_int)[:len_valid]
 
-        cpt_hm = self.gen_map((hl, wl), cpt, mask=cpt_mask)  # 1 x hl x wl
+        cpt_hms = []
+        valid_cpt = cpt[cpt_mask.astype(np.bool)]  # n_valid x 2
+        for i in range(self.num_classes):
+            mask = (cls_id[:len_valid] == i)  # n_valid,
+            xy = valid_cpt[mask]  # n x 2, valid entries for each class
+            cpt_hms.append(self.gen_map((hl, wl), xy))  # each 1 x hl x wl
+        
+        cpt_hm = np.concatenate(cpt_hms, axis=0) 
 
         item = {
             "image": image,
@@ -230,7 +237,9 @@ class Transformation:
             "cpt_ind": cpt_ind,
             "cpt_mask": cpt_mask,
             "wh": wh,
-            "cls_id": cls_id
+            "cls_id": cls_id,
+            #"bboxes": np.array(item["bboxes"]),
+            #"cids": np.array(item["cids"]),
         }
         return item
 
@@ -311,6 +320,7 @@ def main(opt):
 
         if opt.record:
             print("Generating images of the recorded data...")
+            dl = data.DataLoader(ds, batch_size=4, num_workers=opt.worker_instances, shuffle=False)
             iterate(dl)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -325,17 +335,47 @@ def main(opt):
         optimizer = optim.Adam(model.parameters(), opt.lr)
 
         if opt.test:  # do inference
+            logging.info(f"Loading model for inference...")
             checkpoint = torch.load(opt.model_path)
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            epoch = checkpoint["epoch"]
+            # best_loss = checkpoint["loss"]
+            logging.info(f"Loaded model from: {opt.model_path}" \
+                f" and trained till epoch: {epoch}")
 
             model.to(device=device)
             model.eval()
 
+            # batch size of 1
+            val_dl = data.DataLoader(val_ds, batch_size=1, 
+                num_workers=opt.worker_instances, shuffle=False)
+
             batch = next(iter(val_dl))  
             batch = {k: v.to(device=device) for k, v in batch.items()}
-            # batch size of 1
-            assert opt.batch_size == 1
+
+            # check if output hm are working correct!
+            # import matplotlib.pyplot as plt
+            # image = batch["image"].squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+            # fig = plt.figure()
+            # axs = fig.add_axes([0,0,1.0,1.0])
+            # axs.imshow(image, origin="upper")
+            # bboxes = batch["bboxes"].squeeze(0).detach().cpu().numpy()
+            # cids = batch["cids"].squeeze(0).detach().cpu().numpy()
+            # print(cids)
+            # print(transformation.map_cls)
+            # for cid, bbox in zip(cids, bboxes):
+            #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
+            #     axs.add_patch(rect)
+            #     axs.text(bbox[0]+10, bbox[1]+10, str(cid.item()), fontsize=18)
+            # j = 0
+            # plt.savefig(f"./debug/multi_{j}.png"); j += 1
+            # for hm in batch["cpt_hm"].squeeze(0):
+            #     hm = hm.detach().cpu().numpy()
+            #     plt.imshow(hm, origin="upper", cmap="Greys", vmin=0, vmax=1)
+            #     plt.savefig(f"./debug/multi_{j}.png"); j += 1
+
+            # return
 
             with torch.no_grad():
                 out = model(batch["image"])
@@ -367,6 +407,7 @@ def main(opt):
         # tensorboard --logdir=runs --bind_all
         # bind_all -> when training on e.g. gpu server
 
+        logging.info("Entering trainings loop...")
         for epoch in range(start_epoch, opt.num_epochs + 1):
             meter = train(epoch, model, optimizer, train_dl, 
                 device, loss_fn, writer)
