@@ -13,8 +13,8 @@ model_path: ./models/model_last.pth
 
 # Inference
 thres: 0.6
-k: 10
-test: True
+k: 20
+test: False
 
 # Real TlessRealDataset path
 real_path: /mnt/data/tless_real/test_primesense
@@ -26,16 +26,19 @@ std: [0.229, 0.224, 0.225]
 h: 512
 w: 512
 num_classes: 6
-n_max: 10
-augment: False
+n_max: 14
+augment: True
 
 # Training
-resume: False
-num_epochs: 80
+train_vis_interval: 100
+val_vis_interval: 10
+resume: True
+num_epochs: 10
 batch_size: 16
 lr: 1.25e-4
-val_interval: 5
-save_interval: 20
+weight_decay: 1e-2
+val_interval: 1
+save_interval: 10
 
 # System
 blend_path: C:/Program Files/Blender Foundation/Blender 2.90

@@ -2,7 +2,6 @@ import torch
 import torch.nn.functional as F
 
 
-@torch.no_grad()
 def _nms(heat, kernel=3):
     # select padding to keep map dimensions
     pad = (kernel - 1) // 2
@@ -18,7 +17,6 @@ def _nms(heat, kernel=3):
     return heat * keep  # keeps heat dimensions!
 
 
-@torch.no_grad()
 def _topk(heat: torch.Tensor, k):
     """
     Enhances the torch.topk version
@@ -60,7 +58,6 @@ def _topk(heat: torch.Tensor, k):
     return topk_scores, topk_inds, topk_cids, topk_ys, topk_xs
 
 
-@torch.no_grad()
 def _gather_feat(feat, ind, mask=None):
     """
 
@@ -89,7 +86,6 @@ def _gather_feat(feat, ind, mask=None):
     return feat
 
 
-@torch.no_grad()
 def _transpose_and_gather_feat(feat, ind):
     """
     If the network output is given as b x c x h x w and the
@@ -112,7 +108,6 @@ def _transpose_and_gather_feat(feat, ind):
     return feat  # b x k x c
 
 
-@torch.no_grad()
 def decode(out, k):
     """
     From network output to center point detections.

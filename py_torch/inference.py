@@ -180,6 +180,7 @@ def main(opt):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     checkpoint = torch.load(opt.model_path)
+    logging.info(f"Loading model form: {opt.model_path}")
     heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
     model = get_model(heads)
     epoch = checkpoint["epoch"]
@@ -213,6 +214,9 @@ def main(opt):
 
             render(image_gt, dets, opt, show=False, save=True, 
                 path=f"./data/{i:05d}.png", denormalize=False)
+
+            if i > 100:
+                break
 
     return  # exit
 

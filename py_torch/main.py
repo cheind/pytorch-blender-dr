@@ -6,6 +6,7 @@ import numpy as np
 import logging
 import os
 import sys
+import cv2
 
 import torch
 from torch import optim
@@ -49,7 +50,8 @@ class Transformation:
         transformations = [
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
-        ] if opt.augment else []
+            A.Rotate(limit=20, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.2)
+        ] if opt.augment and not opt.test else []
 
         transformations.extend([
             # Rescale an image so that minimum side is equal to max_size,
@@ -351,44 +353,87 @@ def main(opt):
             val_dl = data.DataLoader(val_ds, batch_size=1, 
                 num_workers=opt.worker_instances, shuffle=False)
 
-            batch = next(iter(val_dl))  
-            batch = {k: v.to(device=device) for k, v in batch.items()}
+            for i, batch in enumerate(val_dl): 
+                # batch = next(iter(val_dl))  
+                batch = {k: v.to(device=device) for k, v in batch.items()}
 
-            # check if output hm are working correct!
-            # import matplotlib.pyplot as plt
-            # image = batch["image"].squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
-            # fig = plt.figure()
-            # axs = fig.add_axes([0,0,1.0,1.0])
-            # axs.imshow(image, origin="upper")
-            # bboxes = batch["bboxes"].squeeze(0).detach().cpu().numpy()
-            # cids = batch["cids"].squeeze(0).detach().cpu().numpy()
-            # print(cids)
-            # print(transformation.map_cls)
-            # for cid, bbox in zip(cids, bboxes):
-            #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
-            #     axs.add_patch(rect)
-            #     axs.text(bbox[0]+10, bbox[1]+10, str(cid.item()), fontsize=18)
-            # j = 0
-            # plt.savefig(f"./debug/multi_{j}.png"); j += 1
-            # for hm in batch["cpt_hm"].squeeze(0):
-            #     hm = hm.detach().cpu().numpy()
-            #     plt.imshow(hm, origin="upper", cmap="Greys", vmin=0, vmax=1)
-            #     plt.savefig(f"./debug/multi_{j}.png"); j += 1
+                # check if output hm are working correct!
+                # import matplotlib.pyplot as plt
+                # image = batch["image"].squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
+                # fig = plt.figure()
+                # axs = fig.add_axes([0,0,1.0,1.0])
+                # axs.imshow(image, origin="upper")
+                # bboxes = batch["bboxes"].squeeze(0).detach().cpu().numpy()
+                # cids = batch["cids"].squeeze(0).detach().cpu().numpy()
+                # print(cids)
+                # print(transformation.map_cls)
+                # for cid, bbox in zip(cids, bboxes):
+                #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
+                #     axs.add_patch(rect)
+                #     axs.text(bbox[0]+10, bbox[1]+10, str(cid.item()), fontsize=18)
+                # j = 0
+                # plt.savefig(f"./debug/multi_{j}.png"); j += 1
+                # for hm in batch["cpt_hm"].squeeze(0):
+                #     hm = hm.detach().cpu().numpy()
+                #     plt.imshow(hm, origin="upper", cmap="Greys", vmin=0, vmax=1)
+                #     plt.savefig(f"./debug/multi_{j}.png"); j += 1
+                # return
 
-            # return
+                with torch.no_grad():
+                    out = model(batch["image"])
+                    loss, loss_dict = loss_fn(out, batch)
+                    print(loss_dict)
 
-            with torch.no_grad():
-                out = model(batch["image"])
-                loss, loss_dict = loss_fn(out, batch)
-                print(loss_dict)
+                    dets = decode(out, opt.k)  # 1 x k x 6
+                    dets = filter_dets(dets, opt.thres)
 
-                dets = decode(out, opt.k)  # b x k x 6
-                dets = filter_dets(dets, opt.thres)
+                    image = batch["image"]
+                    dets[..., :4] = dets[..., :4] * opt.down_ratio
+                    render(image, dets, opt, show=False, save=True, 
+                        path=f"./data/{i:05d}pred.png")
 
-                image = batch["image"]
-                dets[..., :4] = dets[..., :4] * opt.down_ratio
-                render(image, dets, opt, show=False, save=True, 
-                    path="./data/test_det.png")
+                    # # render ground truths
+                    # wh = batch["wh"]  # 1 x n_max x 2
+                    # ind = batch["cpt_ind"]  # 1 x n_max
+                    # off = batch["cpt_off"]  # 1 x n_max x 2
+                    # mask = batch["cpt_mask"].bool()  # 1 x n_max
+
+                    # wh = wh[mask].view(1, -1, 2)  # 1 x n x 2
+                    # off = off[mask].view(1, -1, 2)  # 1 x n x 2
+                    # ind = ind[mask].view(1, -1)  # 1 x n
+                    # empty = torch.zeros(1, 2, 128, 128, dtype=torch.float32).to(device=device)
+                    # # generate output from ground truth
+                    # empty = empty.view(1, 2, -1)  # 1 x num_classes x 128**2
+                    # ind = ind.unsqueeze(1).expand(-1, 2, -1)  # 1 x 2 x n
+                    # wh = wh.permute(0, 2, 1)  # 1 x 2 x n
+                    # off = off.permute(0, 2, 1)  # 1 x 2 x n
+                    # wh = empty.scatter(dim=-1, index=ind, src=wh).view(1, 2, 128, 128)
+                    # off = empty.scatter(dim=-1, index=ind, src=off).view(1, 2 ,128, 128)
+                    
+                    # import matplotlib.pyplot as plt
+                    # image_ = batch["cpt_hm"].squeeze(0).cpu()
+                    # fig = plt.figure()
+                    # axs = fig.add_axes([0,0,1.0,1.0])
+                    # image_ = image_.max(0, keepdims=False)[0]
+                    # axs.imshow(image_, origin="upper")
+                    # plt.savefig("./data/cpt_hm.png")
+
+                    # axs.imshow(wh[0, :, ...].cpu().max(0, keepdims=False)[0], 
+                    #     origin="upper")
+                    # plt.savefig("./data/wh.png")
+
+                    # axs.imshow(off[0, :, ...].cpu().max(0, keepdims=False)[0], 
+                    #     origin="upper")
+                    # plt.savefig("./data/off.png")
+
+                    # out = {"cpt_hm": batch["cpt_hm"],
+                    #        "cpt_off": off, "wh": wh}
+                    # dets = decode(out, opt.k)  # 1 x k x 6
+                    # dets = filter_dets(dets, opt.thres)
+                    # dets[..., :4] = dets[..., :4] * opt.down_ratio
+                    # render(image, dets, opt, show=False, save=True, 
+                    #     path=f"./data/{i:05d}gt.png")
+                break
 
             return  # exit
 
@@ -408,9 +453,9 @@ def main(opt):
         # bind_all -> when training on e.g. gpu server
 
         logging.info("Entering trainings loop...")
-        for epoch in range(start_epoch, opt.num_epochs + 1):
+        for epoch in range(start_epoch, opt.num_epochs + start_epoch):
             meter = train(epoch, model, optimizer, train_dl, 
-                device, loss_fn, writer)
+                device, loss_fn, writer, opt)
             
             total_loss = meter.get_avg("total_loss")
             logging.info(f"Loss: {total_loss} at epoch: {epoch} / {opt.num_epochs}")
@@ -431,7 +476,7 @@ def main(opt):
                 }, f"./models/model_{epoch}.pth")
 
             if epoch % opt.val_interval == 0:
-                meter = eval(epoch, model, val_dl, device, loss_fn, writer)
+                meter = eval(epoch, model, val_dl, device, loss_fn, writer, opt)
 
                 if meter.get_avg("total_loss") <= best_loss:
                     best_loss = meter.get_avg("total_loss")
