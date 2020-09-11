@@ -8,7 +8,7 @@ replay: True
 record_path: /mnt/data/20200908_TLess/tless
 record: False
 
-# Relevant if test: True or resume: True
+# Relevant for testing, inference or resuming of training
 model_path: ./models/model_last.pth
 
 # Inference
@@ -30,15 +30,15 @@ n_max: 14
 augment: True
 
 # Training
-train_vis_interval: 100
-val_vis_interval: 10
-resume: True
+train_vis_interval: 200
+val_vis_interval: 20
+resume: False
 num_epochs: 10
 batch_size: 16
 lr: 1.25e-4
 weight_decay: 1e-2
 val_interval: 1
-save_interval: 10
+save_interval: 20
 
 # System
 blend_path: C:/Program Files/Blender Foundation/Blender 2.90

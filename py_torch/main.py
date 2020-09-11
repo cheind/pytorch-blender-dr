@@ -25,6 +25,26 @@ from .decode import decode, filter_dets
 from .visu import render
 
 
+# group classes
+GROUPS = [
+    [1, 2, 3, 4],
+    [5, 6, 7, 8, 9],
+    [10, 11, 12,],
+    [13, 14, 15, 16, 17, 18],
+    [19, 20, 21, 22, 23, 24],
+    [25, 26, 27, 28, 29, 30],
+]
+# group names
+NAMES = [f"{i}" for i in range(len(GROUPS))]
+
+# each category has a unique id and the category name
+CATEGORIES = [{"id": id, "name": name} for id, name in enumerate(NAMES)]
+
+# to map the 1 to 30 class labels to groups from 0 to 5 = new class labels!
+CLSES_MAP = {old_cls_id: new_cls_id for new_cls_id, group in enumerate(GROUPS) 
+                                        for old_cls_id in group}
+
+
 class Transformation:
 
     def __init__(self, opt):
@@ -36,18 +56,9 @@ class Transformation:
         self.mean = opt.mean
         self.std = opt.std
 
-        # group classes
-        groups = [
-            [1, 2, 3, 4], 
-            [5, 6, 7, 8, 9],
-            [10, 11, 12,],
-            [13, 14, 15, 16, 17, 18],
-            [19, 20, 21, 22, 23, 24],
-            [25, 26, 27, 28, 29, 30],
-        ]
-        self.map_cls = {k: v for v, group in enumerate(groups) for k in group}
-
         transformations = [
+            A.RGBShift(p=0.5),
+            A.RandomBrightness(limit=0.1, p=0.2),
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
             A.Rotate(limit=20, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.2)
@@ -207,7 +218,7 @@ class Transformation:
 
         for i, cid in enumerate(cls_id[:len_valid]):
             # map class ids from e.g. 1 to 30 -> 0 to 5 
-            cls_id[i] = self.map_cls[cid]
+            cls_id[i] = CLSES_MAP[cid]
 
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
@@ -240,8 +251,6 @@ class Transformation:
             "cpt_mask": cpt_mask,
             "wh": wh,
             "cls_id": cls_id,
-            #"bboxes": np.array(item["bboxes"]),
-            #"cids": np.array(item["cids"]),
         }
         return item
 
@@ -330,19 +339,18 @@ def main(opt):
 
         # heads - head_name: num. channels of model
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
-        model = get_model(heads)
 
         loss_fn = CenterLoss()
 
-        optimizer = optim.Adam(model.parameters(), opt.lr)
-
         if opt.test:  # do inference
             logging.info(f"Loading model for inference...")
+            model = get_model(heads)
+
             checkpoint = torch.load(opt.model_path)
             model.load_state_dict(checkpoint['model_state_dict'])
-            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             epoch = checkpoint["epoch"]
-            # best_loss = checkpoint["loss"]
+            best_loss = checkpoint["loss"]
+
             logging.info(f"Loaded model from: {opt.model_path}" \
                 f" and trained till epoch: {epoch}")
 
@@ -438,12 +446,20 @@ def main(opt):
             return  # exit
 
         if opt.resume:  # resume training
+            model = get_model(heads)
+            model.to(device=device)
+            optimizer = optim.Adam(model.parameters(), 
+                lr=opt.lr, weight_decay=opt.weight_decay)
             checkpoint = torch.load(opt.model_path)
             model.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             best_loss = checkpoint["loss"]
             start_epoch = checkpoint["epoch"] + 1
-        else:
+        else:  # train from scratch
+            model = get_model(heads)
+            model.to(device=device)
+            optimizer = optim.Adam(model.parameters(), 
+                lr=opt.lr, weight_decay=opt.weight_decay)
             best_loss = 10 ** 8
             start_epoch = 1
 
@@ -458,10 +474,10 @@ def main(opt):
                 device, loss_fn, writer, opt)
             
             total_loss = meter.get_avg("total_loss")
-            logging.info(f"Loss: {total_loss} at epoch: {epoch} / {opt.num_epochs}")
+            logging.info(f"Loss: {total_loss} at epoch: {epoch} / {start_epoch + opt.num_epochs}")
 
             torch.save({
-                'loss': meter.get_avg("total_loss"),
+                'loss': best_loss,
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
@@ -469,7 +485,7 @@ def main(opt):
 
             if epoch % opt.save_interval == 0:
                 torch.save({
-                    'loss': meter.get_avg("total_loss"),
+                    'loss': best_loss,
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
@@ -487,7 +503,7 @@ def main(opt):
                         'optimizer_state_dict': optimizer.state_dict(),
                     }, f"./models/best_model.pth")
 
-        logging.info("Finished training!")
+        logging.info("Done training!")
         return  # exit
 
 

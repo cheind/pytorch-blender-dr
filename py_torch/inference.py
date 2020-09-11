@@ -14,6 +14,8 @@ from .utils import Config
 from .model import get_model
 from .decode import decode, filter_dets
 from .visu import render
+from .main import CLSES_MAP
+from .evaluation import create_gt_anns, evaluate
 
 
 class Transformation:
@@ -32,13 +34,7 @@ class Transformation:
             A.Normalize(mean=opt.mean, std=opt.std),
         ]
 
-        # bbox_params = A.BboxParams(
-        #     format="coco",
-        #     min_area=100,  # < 100 pixels => drop bbox
-        #     min_visibility=0.2,  # < 20% of orig. vis. => drop bbox
-        # )
-
-        self.transform_fn = A.Compose(transformations)  #, bbox_params=bbox_params)
+        self.transform_fn = A.Compose(transformations)
 
     def item_transform(self, item):
         """
@@ -65,24 +61,6 @@ class Transformation:
 
         h, w = image.shape[:2]
 
-        # adjust bboxes to pass initial - check_bbox(bbox) - call
-        # from the albumentations package
-        # library can't deal with bbox corners outside of the image
-        # x, y, bw, bh = np.split(bboxes, 4, -1)  # each n x 1
-        # x[x < 0] = 0
-        # y[y < 0] = 0
-        # x[x > w] = w
-        # y[y > h] = h
-        # bw[x + bw > w] = w - x[x + bw > w]
-        # bh[y + bh > h] = h - y[y + bh > h]
-        # bboxes = np.concatenate((x, y, bw, bh), axis=-1)
-        # note: further processing is done by albumentations, bboxes
-        # are dropped when not satisfying min. area or visibility!
-
-        # prepare bboxes for transformation
-        # bbox_labels = np.arange(len(bboxes), dtype=np.float32)
-        # bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
-
         transformed = self.transform_fn(image=image)  #, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
         h, w = image.shape[:2]  # rescaled image
@@ -94,12 +72,6 @@ class Transformation:
         image = cv2.copyMakeBorder(image, 0, bottom, 0, right, 
             cv2.BORDER_CONSTANT, value=0)
         image = image.transpose((2, 0, 1))  # 3 x h x w
-
-        # bboxes = np.array(transformed["bboxes"], dtype=np.float32)
-        # cids = cids[bboxes[:, -1].astype(np.int32)]  # temporary labels for class id reassignment
-        # bboxes = bboxes[:, :-1]  # drop temporary labels
-        # note: note some bboxes might be dropped, e.g. when to small
-        # to be considered as valid!
 
         item.update({
             "image": image,  # 3 x h x w 
@@ -147,8 +119,25 @@ class TLessRealDataset(data.Dataset):
                 bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
                 
                 self.all_rgbpaths.append(rgbpath)
+                # list of n_objs x 4
                 self.all_bboxes.append(np.array(bboxes))
                 self.all_clsids.append(np.array(clsids))
+        
+        # create image ids for evaluation, each image path has 
+        # a unique id
+        self.img_ids = list(range(len(self.all_rgbpaths)))
+
+        # remap class ids to groups
+        for i in range(len(self.all_clsids)):
+            # take the old id and map it to a new one
+            new_ids = [CLSES_MAP[old_id] for old_id in self.all_clsids[i]]
+            self.all_clsids[i] = np.array(new_ids, dtype=np.int32)
+
+        # produce ground truth annotations
+        self.gt_json_path = "./evaluation/gt.json"
+
+        create_gt_anns(self.img_ids, self.all_bboxes, 
+            self.all_clsids, self.gt_json_path)
                 
     def __len__(self):
         return len(self.all_rgbpaths)
@@ -173,6 +162,8 @@ def main(opt):
     # Setup Dataset
     ds = TLessRealDataset(opt.real_path, item_transform)
     logging.info(f"Real data set size: {len(ds)}")
+
+    return
 
     # Setup DataLoader
     dl = data.DataLoader(ds, batch_size=1, num_workers=4, shuffle=False)
