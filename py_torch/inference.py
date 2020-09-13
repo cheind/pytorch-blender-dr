@@ -5,6 +5,10 @@ import json
 import cv2
 import os
 
+# to redirect evaluations
+import sys
+import io
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -94,7 +98,8 @@ class TLessRealDataset(data.Dataset):
     https://github.com/thodan/bop_toolkit/blob/master/docs/bop_datasets_format.md
     """
 
-    def __init__(self, basepath, item_transform=None):
+    def __init__(self, basepath, gt_json_path, item_transform=None):
+
         self.basepath = Path(basepath)
         self.item_transform = item_transform
         assert self.basepath.exists()
@@ -134,15 +139,13 @@ class TLessRealDataset(data.Dataset):
             self.all_clsids[i] = np.array(new_ids, dtype=np.int32)
 
         # produce ground truth annotations
-        self.gt_json_path = "./evaluation/gt.json"
-
         create_gt_anns(self.img_ids, self.all_bboxes, 
-            self.all_clsids, self.gt_json_path)
+            self.all_clsids, gt_json_path)
                 
     def __len__(self):
         return len(self.all_rgbpaths)
     
-    def __getitem__(self, index):
+    def __getitem__(self, index: int):
         image = cv2.imread(str(self.all_rgbpaths[index]))
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         # item: bundle of per image bboxes and class ids
@@ -150,9 +153,38 @@ class TLessRealDataset(data.Dataset):
             "image": image,  # np.ndarray, h x w x 3
             "bboxes": self.all_bboxes[index],
             "cids": self.all_clsids[index],
+            # for evaluation of the AP
+            "image_id": index,
             }
+        # update the item dictionary
         item = self.item_transform(item)
         return item
+
+    
+def _to_float(x):
+    """ Reduce precision to save memory as adviced by the COCO team. """
+    return float(f"{x:.2f}")
+
+class StdOutManager:
+    """ Redirect stdout output to a csv file. """
+
+    def __init__(self, filename: str, parser: callable):
+        self.filename = filename
+        self.file = None
+        self.save_stdout = sys.stdout
+        self.buffer = io.StringIO()
+        self.parser = parser
+
+    def __enter__(self):
+        self.file = open(self.filename, "w")
+        sys.stdout = self.buffer
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        out = self.parser(self.buffer.getvalue())
+        self.file.write(out)
+        self.buffer.close()
+        self.file.close()
+        sys.stdout = self.save_stdout
 
 
 def main(opt):
@@ -160,10 +192,10 @@ def main(opt):
     item_transform = transformation.item_transform
 
     # Setup Dataset
-    ds = TLessRealDataset(opt.real_path, item_transform)
+    gt_json_path = "./evaluation/gt.json"
+    pred_json_path = "./evaluation/pred.json"
+    ds = TLessRealDataset(opt.real_path, gt_json_path, item_transform)
     logging.info(f"Real data set size: {len(ds)}")
-
-    return
 
     # Setup DataLoader
     dl = data.DataLoader(ds, batch_size=1, num_workers=4, shuffle=False)
@@ -180,13 +212,14 @@ def main(opt):
     model.eval()
     logging.info(f"Loaded model from epoch: {epoch}")
 
+    pred = []
     with torch.no_grad():
         for i, batch in enumerate(dl):
             batch = {k: v.to(device=device) for k, v in batch.items()}
 
             out = model(batch["image"])  # 1 x 3 x h x w
             dets = decode(out, opt.k)  # 1 x k x 6
-            dets = filter_dets(dets, opt.thres)
+            dets = filter_dets(dets, opt.thres)  # 1 x k' x 6
             logging.info("Decoded model output!")
 
             image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
@@ -206,14 +239,37 @@ def main(opt):
             render(image_gt, dets, opt, show=False, save=True, 
                 path=f"./data/{i:05d}.png", denormalize=False)
 
+            # create json results for AP evaluation
+            image_id = int(batch["image_id"])
+            dets = dets.squeeze(0).cpu().numpy()  # k' x 6
+
+            bboxes = dets[..., :4]  # k' x 4
+            scores = dets[..., 4]  # k',
+            clsids = dets[..., 5]  # k',
+
+            for bbox, clsid, score in zip(bboxes, clsids, scores):
+                pred.append({
+                    "image_id": image_id,
+                    "category_id": int(clsid),
+                    "bbox": list(map(_to_float, bbox)),
+                    "score": _to_float(score),
+                })
+
             if i > 100:
                 break
+        
+    # save json results for evaluation
+    json.dump(pred, open(pred_json_path, "w"))
 
+        evaluate(gt_json_path, pred_json_path)
+    
     return  # exit
 
 
 if __name__ == '__main__':
     import logging
+
+    EVAL_FILE = "./evaluation/AP.csv"
 
     logging.basicConfig(level=logging.INFO)
 

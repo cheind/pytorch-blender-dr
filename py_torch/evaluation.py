@@ -42,7 +42,7 @@ def create_gt_anns(image_ids, all_bboxes, all_category_ids,
             annotations.append({
                 "image_id": int(image_id),
                 "category_id": int(category_id),
-                "bbox": list(bbox),
+                "bbox": bbox.tolist(),
                 "id": int(id),  # each annotation has to have a unique id
                 "iscrowd": int(is_crowd),
                 "area": int(area),
