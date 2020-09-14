@@ -7,6 +7,8 @@ import logging
 import os
 import sys
 import cv2
+from pathlib import Path
+import json
 
 import torch
 from torch import optim
@@ -47,7 +49,7 @@ CLSES_MAP = {old_cls_id: new_cls_id for new_cls_id, group in enumerate(GROUPS)
 
 class Transformation:
 
-    def __init__(self, opt):
+    def __init__(self, opt, remap_clses=False):
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
         self.num_classes = opt.num_classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
@@ -55,6 +57,7 @@ class Transformation:
         # ImageNet stats
         self.mean = opt.mean
         self.std = opt.std
+        self.remap_clses = remap_clses
 
         transformations = [
             A.RGBShift(p=0.5),
@@ -178,6 +181,11 @@ class Transformation:
         y[y < 0] = 0
         x[x > w] = w
         y[y > h] = h
+        # in the phot realistic blender renders some width and hights are <0 !!
+        # => clip values
+        bw = np.clip(bw, 0, w)
+        bh = np.clip(bh, 0, h)
+        # bring bbox inside the image to be used with albumentations
         bw[x + bw > w] = w - x[x + bw > w]
         bh[y + bh > h] = h - y[y + bh > h]
 
@@ -190,6 +198,50 @@ class Transformation:
         # prepare bboxes for transformation
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)
         bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
+
+
+        # import matplotlib.pyplot as plt
+        # try:
+        #     transformed = self.transform_fn(image=image, bboxes=bboxes)
+        # except Exception as e:
+        #     img, bboxes, cids = item['image'], item['bboxes'], item['cids']
+        #     H, W = img.shape[:2]  # img: h x w x 3
+        #     DPI = 96
+        #     fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
+        #     axs = fig.add_axes([0,0,1.0,1.0])
+        #     axs.imshow(img, origin='upper')
+        #     for cid, bbox in zip(cids,bboxes):
+        #         rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
+        #         axs.add_patch(rect)
+        #         axs.text(bbox[0]+10, bbox[1]+10, f'Class {cid.item()}', fontsize=18)
+        #     axs.set_axis_off()
+        #     axs.set_xlim(0,W-1)
+        #     axs.set_ylim(H-1,0)
+
+        #     plt.savefig("./debug/weird_bboxes.png")
+        #     plt.close(fig)
+        #     print(item["bboxes"])
+            
+        #     print(e); raise RuntimeError
+
+
+        # img, bboxes, cids = item['image'], item['bboxes'], item['cids']
+        # H, W = img.shape[:2]  # img: h x w x 3
+        # DPI = 96
+        # fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
+        # axs = fig.add_axes([0,0,1.0,1.0])
+        # axs.imshow(img, origin='upper')
+        # for cid, bbox in zip(cids,bboxes):
+        #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
+        #     axs.add_patch(rect)
+        #     axs.text(bbox[0]+10, bbox[1]+10, f'Class {cid.item()}', fontsize=18)
+        # axs.set_axis_off()
+        # axs.set_xlim(0,W-1)
+        # axs.set_ylim(H-1,0)
+
+        # plt.savefig("./debug/normal_bboxes.png")
+        # plt.close(fig)
+
 
         transformed = self.transform_fn(image=image, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
@@ -216,9 +268,10 @@ class Transformation:
         # the bbox labels help to reassign the correct classes
         cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
 
-        for i, cid in enumerate(cls_id[:len_valid]):
-            # map class ids from e.g. 1 to 30 -> 0 to 5 
-            cls_id[i] = CLSES_MAP[cid]
+        if self.remap_clses:
+            for i, cid in enumerate(cls_id[:len_valid]):
+                # map class ids from e.g. 1 to 30 -> 0 to 5 
+                cls_id[i] = CLSES_MAP[cid]
 
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
@@ -255,6 +308,74 @@ class Transformation:
         return item
 
 
+class TLessTrainDataset(data.Dataset):
+    """
+    Provides access to images, bboxes and classids 
+    for TLess real dataset.
+    """
+
+    def __init__(self, basepath, item_transform=None):
+
+        self.basepath = Path(basepath)
+        self.item_transform = item_transform
+        assert self.basepath.exists()
+        
+        # 000001, 000002,...
+        self.all_rgbpaths = []
+        self.all_bboxes = []
+        self.all_clsids = []
+        
+        scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
+        for scenepath in scenes:
+            with open(scenepath / 'scene_gt.json', 'r') as fp:
+                scene_gt = json.loads(fp.read())
+            with open(scenepath / 'scene_gt_info.json', 'r') as fp:
+                scene_gt_info = json.loads(fp.read())
+                
+            for idx in scene_gt.keys():
+                paths = [scenepath / 'rgb' / f'{int(idx):06d}.{ext}' for ext in ['png', 'jpg']]
+                paths = [p for p in paths if p.exists()]
+                assert len(paths)==1
+                rgbpath = paths[0]
+                
+                clsids = [int(e['obj_id']) for e in scene_gt[idx]]
+                bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
+                
+                self.all_rgbpaths.append(rgbpath)
+                # list of n_objs x 4
+                self.all_bboxes.append(np.array(bboxes))
+                self.all_clsids.append(np.array(clsids))
+        
+        # create image ids for evaluation, each image path has 
+        # a unique id
+        self.img_ids = list(range(len(self.all_rgbpaths)))
+
+        # remap class ids to groups
+        for i in range(len(self.all_clsids)):
+            # take the old id and map it to a new one
+            new_ids = [CLSES_MAP[old_id] for old_id in self.all_clsids[i]]
+            self.all_clsids[i] = np.array(new_ids, dtype=np.int32)
+
+        logging.warning("Remapped class ids here, don't remap in 'item_transform' !!")
+                
+    def __len__(self):
+        return len(self.all_rgbpaths)
+    
+    def __getitem__(self, index: int):
+        image = cv2.imread(str(self.all_rgbpaths[index]))
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        # item: bundle of per image bboxes and class ids
+        item = {
+            "image": image,  # np.ndarray, h x w x 3
+            "bboxes": self.all_bboxes[index],
+            "cids": self.all_clsids[index],
+        }
+        
+        # build new item dictionary
+        item = self.item_transform(item)
+        return item
+
+
 def iterate(dl):
     DPI=96
     for step, item in enumerate(dl):
@@ -276,7 +397,8 @@ def iterate(dl):
 
 
 def main(opt):
-    transformation = Transformation(opt)
+    # CARE REMAP CLSES ONLY ON PTB DATA
+    transformation = Transformation(opt, remap_clses=False)
     item_transform = transformation.item_transform
 
     with ExitStack() as es:
@@ -310,6 +432,9 @@ def main(opt):
             # Otherwise we replay from file.
             ds = btt.FileDataset(opt.record_path, item_transform=item_transform)
             shuffle = False
+        
+        ds = TLessTrainDataset(opt.real_train_path, item_transform)
+        logging.info(f"Dataset: {ds.__class__.__name__}")
 
         logging.info(f"Num. of samples: {len(ds)}")
         logging.info(f"Batch size: {opt.batch_size}")
@@ -325,7 +450,7 @@ def main(opt):
 
         # Setup DataLoader: train, validation split
         train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
-            num_workers=opt.worker_instances, shuffle=False)
+            num_workers=opt.worker_instances, shuffle=True)
         val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
             num_workers=opt.worker_instances, shuffle=False)
 
@@ -469,6 +594,7 @@ def main(opt):
         # bind_all -> when training on e.g. gpu server
 
         logging.info("Entering trainings loop...")
+
         for epoch in range(start_epoch, opt.num_epochs + start_epoch):
             meter = train(epoch, model, optimizer, train_dl, 
                 device, loss_fn, writer, opt)

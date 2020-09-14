@@ -7,8 +7,8 @@ import sys
 import io
 
 
-class CsvStream:
-    """ Redirect stdout output to a csv file. """
+class FileStream:
+    """ Redirect stdout output to a file. """
 
     def __init__(self, filepath: str, parser: callable):
         self.filepath = filepath
@@ -17,10 +17,11 @@ class CsvStream:
         self.parser = parser
 
     def write(self, s):
-        self.buffer.write(s)
+        self.buffer.write(s)  # redirect to buffer
+        sys.__stdout__.write(s)  # and print it to console
 
     def __enter__(self):
-        self.file = open(self.filename, "w")
+        self.file = open(self.filepath, "w+")
         sys.stdout = self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -152,9 +153,7 @@ class Config(object):
 
 
 if __name__ == "__main__":
-    filepath = './evaluation/example.txt'
-
-    parser = lamda x: x
-
-    with CsvStream():
-        print('hello world\nhy')
+    
+    with FileStream('./evaluation/example.txt', parser=lambda x: x):
+        print('hello world\nhey!')
+    

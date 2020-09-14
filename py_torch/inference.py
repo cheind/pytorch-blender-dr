@@ -4,13 +4,14 @@ from pathlib import Path
 import json
 import cv2
 import os
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils import data
 
-from .utils import Config
+from .utils import Config, FileStream
 from .model import get_model
 from .decode import decode, filter_dets
 from .visu import render
@@ -189,13 +190,12 @@ def main(opt):
 
     pred = []
     with torch.no_grad():
-        for i, batch in enumerate(dl):
+        for (i, batch) in tqdm(enumerate(dl), desc="Evaluation", total=len(dl)):
             batch = {k: v.to(device=device) for k, v in batch.items()}
 
             out = model(batch["image"])  # 1 x 3 x h x w
             dets = decode(out, opt.k)  # 1 x k x 6
             dets = filter_dets(dets, opt.thres)  # 1 x k' x 6
-            logging.info("Decoded model output!")
 
             image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
             dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
@@ -211,8 +211,8 @@ def main(opt):
             dets[..., 2] *= x_scale  # w
             dets[..., 3] *= y_scale  # h
 
-            render(image_gt, dets, opt, show=False, save=True, 
-                path=f"./data/{i:05d}.png", denormalize=False)
+            # render(image_gt, dets, opt, show=False, save=True, 
+            #     path=f"./data/{i:05d}.png", denormalize=False)
 
             # create json results for AP evaluation
             image_id = int(batch["image_id"])
@@ -229,13 +229,11 @@ def main(opt):
                     "bbox": list(map(_to_float, bbox)),
                     "score": _to_float(score),
                 })
-
-            if i > 100:
-                break
         
     # save json results for evaluation
     json.dump(pred, open(pred_json_path, "w"))
 
+    with FileStream('./evaluation/AP.txt', parser=lambda x: x):
         evaluate(gt_json_path, pred_json_path)
     
     return  # exit
@@ -243,8 +241,6 @@ def main(opt):
 
 if __name__ == '__main__':
     import logging
-
-    EVAL_FILE = "./evaluation/AP.csv"
 
     logging.basicConfig(level=logging.INFO)
 
