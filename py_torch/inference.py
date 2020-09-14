@@ -5,10 +5,6 @@ import json
 import cv2
 import os
 
-# to redirect evaluations
-import sys
-import io
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -164,27 +160,6 @@ class TLessRealDataset(data.Dataset):
 def _to_float(x):
     """ Reduce precision to save memory as adviced by the COCO team. """
     return float(f"{x:.2f}")
-
-class StdOutManager:
-    """ Redirect stdout output to a csv file. """
-
-    def __init__(self, filename: str, parser: callable):
-        self.filename = filename
-        self.file = None
-        self.save_stdout = sys.stdout
-        self.buffer = io.StringIO()
-        self.parser = parser
-
-    def __enter__(self):
-        self.file = open(self.filename, "w")
-        sys.stdout = self.buffer
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        out = self.parser(self.buffer.getvalue())
-        self.file.write(out)
-        self.buffer.close()
-        self.file.close()
-        sys.stdout = self.save_stdout
 
 
 def main(opt):

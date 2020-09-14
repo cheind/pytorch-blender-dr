@@ -2,6 +2,34 @@
 from collections import defaultdict
 import torch
 
+# to redirect evaluations
+import sys
+import io
+
+
+class CsvStream:
+    """ Redirect stdout output to a csv file. """
+
+    def __init__(self, filepath: str, parser: callable):
+        self.filepath = filepath
+        self.file = None
+        self.buffer = io.StringIO()
+        self.parser = parser
+
+    def write(self, s):
+        self.buffer.write(s)
+
+    def __enter__(self):
+        self.file = open(self.filename, "w")
+        sys.stdout = self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        out = self.parser(self.buffer.getvalue())
+        self.file.write(out)
+        self.buffer.close()
+        self.file.close()
+        sys.stdout = sys.__stdout__
+
 
 class AverageMeter:
     """Compute and store the average and current value.
@@ -121,3 +149,12 @@ class Config(object):
         for k, v in self.__dict__.items():
             info.append(f"{k}: {v}\n")
         return "".join(info)
+
+
+if __name__ == "__main__":
+    filepath = './evaluation/example.txt'
+
+    parser = lamda x: x
+
+    with CsvStream():
+        print('hello world\nhy')
