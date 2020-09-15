@@ -42,9 +42,13 @@ def main():
             # we generate N images from the same scene using 
             # random camera poses.       
             for _ in range(cfg['camera.num_images']):
+                bbox_obj, bbox_obj_z = annotation.bboxes(cam, objs)
+                bbox_occ, bbox_occ_z = annotation.bboxes(cam, occs)
+                visfracs = annotation.compute_visfracs(cam, bbox_obj, bbox_obj_z, bbox_occ, bbox_occ_z)
                 pub.publish(
                     image=off.render(), 
-                    bboxes=annotation.bboxes(cam, objs),
+                    bboxes=bbox_obj,
+                    visfracs=visfracs,
                     cids=annotation.classids(objs)
                 )
                 lfrom = btb.utils.random_spherical_loc(

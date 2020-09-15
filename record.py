@@ -6,21 +6,25 @@ import time
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-def iterate(dl):
+def draw_image(ax, img, cids, bboxes, visfracs, min_visfrac):
+    ax.imshow(img, origin='upper')
+    for cid, bbox, vfrac in zip(cids,bboxes,visfracs):
+        if vfrac > min_visfrac:
+            rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
+            ax.add_patch(rect)
+            ax.text(bbox[0]-10, bbox[1]+10, f'C:{cid.item()}, V:{vfrac:.2f}', fontsize=8)
+
+def iterate(dl, min_visfrac=0.5):
     DPI=96
     for step, item in enumerate(dl):
         if step % 100 == 0:
             print(f'Received batch #{step:05d}')
-            img, bboxes, cids = item['image'], item['bboxes'], item['cids']
+            img, bboxes, cids, visfracs = item['image'], item['bboxes'], item['cids'], item['visfracs']
             H,W = img.shape[1], img.shape[2]
             fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
             axs = [fig.add_axes([0,0,0.5,0.5]), fig.add_axes([0.5,0.0,0.5,0.5]), fig.add_axes([0.0,0.5,0.5,0.5]), fig.add_axes([0.5,0.5,0.5,0.5])]
             for i in range(img.shape[0]):
-                axs[i].imshow(img[i], origin='upper')
-                for cid, bbox in zip(cids[i],bboxes[i]):
-                    rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
-                    axs[i].add_patch(rect)
-                    axs[i].text(bbox[0]+10, bbox[1]+10, f'Class {cid.item()}', fontsize=18)
+                draw_image(axs[i], img[i], cids[i], bboxes[i], visfracs[i], min_visfrac=min_visfrac)
                 axs[i].set_axis_off()
                 axs[i].set_xlim(0,W-1)
                 axs[i].set_ylim(H-1,0)
@@ -59,7 +63,7 @@ def main():
         dl = data.DataLoader(ds, batch_size=4, num_workers=4) # bug when num_workers = 4, the batch size is only one then??
         t = time.time()
         iterate(dl)
-        print(f'Finished in {t-time.time()} seconds.')
+        print(f'Finished in {time.time()-t} seconds.')
 
     if args.json_config:
         from shutil import copyfile
