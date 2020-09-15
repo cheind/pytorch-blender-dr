@@ -84,7 +84,7 @@ class Transformation:
         return item
 
 
-class TLessRealDataset(data.Dataset):
+class TLessDataset(data.Dataset):
     """Provides access to images, bboxes and classids for TLess real dataset.
     
     Download dataset
@@ -114,16 +114,40 @@ class TLessRealDataset(data.Dataset):
                 scene_gt_info = json.loads(fp.read())
                 
             for idx in scene_gt.keys():
-                rgbpath = scenepath / 'rgb' / f'{int(idx):06d}.png'
-                assert rgbpath.exists()
+                paths = [scenepath / 'rgb' / f'{int(idx):06d}.{ext}' for ext in ['png', 'jpg']]
+                paths = [p for p in paths if p.exists()]
+                assert len(paths)==1
+                rgbpath = paths[0]
                 
                 clsids = [int(e['obj_id']) for e in scene_gt[idx]]
-                bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
+                # bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
                 
-                self.all_rgbpaths.append(rgbpath)
-                # list of n_objs x 4
-                self.all_bboxes.append(np.array(bboxes))
-                self.all_clsids.append(np.array(clsids))
+                # CHANGED to bbox_visib
+                bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
+
+                # visib_fract takes the inter-object coverage into account
+                # thus we can avoid bboxes of covered objects
+                # AND by taking the bbox_visib ones we have all bbox edges 
+                # INSIDE of the image and hence no further preprocessing needed
+                # before feeding into albumentation's transformations 
+                visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
+                
+                filtered_bboxes, filtered_clsids = [], []
+                thres = 0.35
+                ###### filter bboxes by visibility:
+                for bbox, cid, vis in zip(bboxes, clsids, visib_fracts):
+                    if vis > thres:
+                        filtered_bboxes.append(bbox)
+                        filtered_clsids.append(filtered_clsids)
+
+                bboxes = filtered_bboxes
+                clsinds = filtered_clsids
+                ######
+                if len(bboxes) > 0:  # only add non empty images
+                    self.all_rgbpaths.append(rgbpath)
+                    # list of n_objs x 4
+                    self.all_bboxes.append(np.array(bboxes))
+                    self.all_clsids.append(np.array(clsids))
         
         # create image ids for evaluation, each image path has 
         # a unique id
@@ -170,7 +194,12 @@ def main(opt):
     # Setup Dataset
     gt_json_path = "./evaluation/gt.json"
     pred_json_path = "./evaluation/pred.json"
-    ds = TLessRealDataset(opt.real_path, gt_json_path, item_transform)
+
+    # select tless path:
+    path = opt.real_path
+    #path = 
+
+    ds = TLessDataset(path, gt_json_path, item_transform)
     logging.info(f"Real data set size: {len(ds)}")
 
     # Setup DataLoader

@@ -19,18 +19,41 @@ def to_image(output, batch, opt):
         path=None, ret=True)
     image = image_from_figure(fig, close=True).transpose(2, 0, 1)
 
+    
+    # build gt dets
+    inds = batch["cpt_ind"][:1].detach().clone().cpu()  # 1 x n_max
+    wh = batch["wh"][:1].detach().clone().cpu()  # 1 x n_max x 2
+    cids = batch["cls_id"][:1].detach().clone().cpu()  # 1 x n_max
+    mask = batch["cpt_mask"][0].detach().clone().cpu()  # n_max,
+    
+    ws = wh[..., 0]  # 1 x n_max
+    hs = wh[..., 1]  # 1 x n_max
+    ys = torch.true_divide(inds, ws).int().float()  # 1 x n_max
+    xs = (inds % ws).int().float()  # 1 x n_max
+    scores = torch.ones_like(cids)  # 1 x n_max
+
+    dets = torch.stack([xs, ys, ws, hs, scores], dim=-1)  # 1 x n_max x 6
+    dets = dets[:, mask.bool()]  # 1 x n' x 6
+
+    fig = render(image, dets, opt, show=False, save=False, 
+        path=None, ret=True)
+    image_gt = image_from_figure(fig, close=True).transpose(2, 0, 1)
+
     # 1 x num_classes x hl x wl
     hm = [output["cpt_hm"][:1].detach().clone().cpu(),
         batch["cpt_hm"][:1].detach().clone().cpu()]
+    print("min, max", torch.min(hm[0], torch.max(hm[0])))
     hm = [torch.sigmoid(x) for x in hm]  # range 
+    print("min, max", torch.min(hm[0], torch.max(hm[0])))
     # 1 x 1 x hl x wl
     hm = [x.max(dim=1, keepdims=True)[0] for x in hm]
     
     hm = torch.cat(hm, dim=0)  # 2 x 1 x hl x wl
 
-    hm = make_grid(hm, range=(0, 1), pad_value=1)  # 3 x h x 2 * w + padding
+    hm = make_grid(hm, normalize=True, range=(0, 1), 
+        pad_value=1)  # 3 x h x 2 * w + padding
 
-    return image, hm  # 3 x h x w 
+    return image, hm, image_gt  # 3 x h x w 
 
 
 def train(epoch, model, optimizer, dataloader, device, loss_fn, writer, opt):

@@ -59,8 +59,11 @@ class Transformation:
         self.std = opt.std
         self.remap_clses = remap_clses
 
+        shift = 100
+
         transformations = [
-            A.RGBShift(p=0.5),
+            A.RGBShift(p=0.5, r_shift_limit=shift, g_shift_limit=shift,
+                b_shift_limit=shift),
             A.RandomBrightness(limit=0.1, p=0.2),
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
@@ -173,27 +176,29 @@ class Transformation:
 
         h, w = image.shape[:2]
 
-        # adjust bboxes to pass initial - check_bbox(bbox) - call
-        # from the albumentations package
-        # library can't deal with bbox corners outside of the image
-        x, y, bw, bh = np.split(bboxes, 4, -1)  # each n x 1
-        x[x < 0] = 0
-        y[y < 0] = 0
-        x[x > w] = w
-        y[y > h] = h
-        # in the phot realistic blender renders some width and hights are <0 !!
-        # => clip values
-        bw = np.clip(bw, 0, w)
-        bh = np.clip(bh, 0, h)
-        # bring bbox inside the image to be used with albumentations
-        bw[x + bw > w] = w - x[x + bw > w]
-        bh[y + bh > h] = h - y[y + bh > h]
+        # # adjust bboxes to pass initial - check_bbox(bbox) - call
+        # # from the albumentations package
+        # # library can't deal with bbox corners outside of the image
+        # x, y, bw, bh = np.split(bboxes, 4, -1)  # each n x 1
+        # x[x < 0] = 0
+        # y[y < 0] = 0
+        # x[x > w] = w
+        # y[y > h] = h
+        # # in the phot realistic blender renders some width and hights are <0 !!
+        # # => clip values
+        # bw = np.clip(bw, 0, w)
+        # bh = np.clip(bh, 0, h)
+        # # bring bbox inside the image to be used with albumentations
+        # bw[x + bw > w] = w - x[x + bw > w]
+        # bh[y + bh > h] = h - y[y + bh > h]
 
-        mask = np.logical_or(bw == 0, bh == 0).reshape(-1)  # n,
-        bboxes = np.concatenate((x, y, bw, bh), axis=-1)  # n x 4
-        bboxes = bboxes[~mask]
+        # mask = np.logical_or(bw == 0, bh == 0).reshape(-1)  # n,
+        # bboxes = np.concatenate((x, y, bw, bh), axis=-1)  # n x 4
+        # bboxes = bboxes[~mask]
         # note: further processing is done by albumentations, bboxes
         # are dropped when not satisfying min. area or visibility!
+
+        # print(bboxes.shape)  -> (0,)
 
         # prepare bboxes for transformation
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)
@@ -296,7 +301,7 @@ class Transformation:
         
         cpt_hm = np.concatenate(cpt_hms, axis=0) 
 
-        item = {
+        item.update({
             "image": image,
             "cpt_hm": cpt_hm,
             "cpt_off": cpt_off,
@@ -304,7 +309,7 @@ class Transformation:
             "cpt_mask": cpt_mask,
             "wh": wh,
             "cls_id": cls_id,
-        }
+        })
         return item
 
 
@@ -339,12 +344,34 @@ class TLessTrainDataset(data.Dataset):
                 rgbpath = paths[0]
                 
                 clsids = [int(e['obj_id']) for e in scene_gt[idx]]
-                bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
+                # bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
                 
-                self.all_rgbpaths.append(rgbpath)
-                # list of n_objs x 4
-                self.all_bboxes.append(np.array(bboxes))
-                self.all_clsids.append(np.array(clsids))
+                # CHANGED to bbox_visib
+                bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
+
+                # visib_fract takes the inter-object coverage into account
+                # thus we can avoid bboxes of covered objects
+                # AND by taking the bbox_visib ones we have all bbox edges 
+                # INSIDE of the image and hence no further preprocessing needed
+                # before feeding into albumentation's transformations 
+                visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
+                
+                filtered_bboxes, filtered_clsids = [], []
+                thres = 0.35
+                ###### filter bboxes by visibility:
+                for bbox, cid, vis in zip(bboxes, clsids, visib_fracts):
+                    if vis > thres:
+                        filtered_bboxes.append(bbox)
+                        filtered_clsids.append(filtered_clsids)
+
+                bboxes = filtered_bboxes
+                clsinds = filtered_clsids
+                ######
+                if len(bboxes) > 0:  # only add non empty images
+                    self.all_rgbpaths.append(rgbpath)
+                    # list of n_objs x 4
+                    self.all_bboxes.append(np.array(bboxes))
+                    self.all_clsids.append(np.array(clsids))
         
         # create image ids for evaluation, each image path has 
         # a unique id

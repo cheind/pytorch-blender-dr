@@ -9,7 +9,7 @@ record_path: /mnt/data/20200908_TLess/tless
 record: False
 
 # Relevant for testing, inference or resuming of training
-model_path: ./models/model_last.pth
+model_path: ./models/model_last_1ep.pth
 
 real_train_path: /mnt/data/tless_train_pbr
 
@@ -29,7 +29,7 @@ h: 512
 w: 512
 num_classes: 6
 n_max: 25
-augment: True
+augment: False
 
 # Training
 train_vis_interval: 200
@@ -37,8 +37,10 @@ val_vis_interval: 20
 resume: False
 num_epochs: 4
 batch_size: 16
-lr: 1.25e-4
-weight_decay: 1.0e-2
+# 1.25e-4
+lr: 1.0e-3
+# 1.0e-2
+weight_decay: 0
 val_interval: 1
 save_interval: 200
 
