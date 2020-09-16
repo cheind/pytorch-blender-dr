@@ -189,7 +189,7 @@ def main(opt):
     logging.info(f"Real data set size: {len(ds)}")
 
     # Setup DataLoader
-    dl = data.DataLoader(ds, batch_size=1, num_workers=4, shuffle=False)
+    dl = data.DataLoader(ds, batch_size=1, num_workers=opt.worker_instances, shuffle=False)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -246,12 +246,12 @@ def main(opt):
 
             bboxes = dets[..., :4]  # k' x 4
             scores = dets[..., 4]  # k',
-            clsids = dets[..., 5]  # k',
+            cids = dets[..., 5]  # k',
 
-            for bbox, clsid, score in zip(bboxes, clsids, scores):
+            for bbox, cid, score in zip(bboxes, cids, scores):
                 pred.append({
                     "image_id": image_id,
-                    "category_id": int(clsid),
+                    "category_id": int(cid),
                     "bbox": list(map(_to_float, bbox)),
                     "score": _to_float(score),
                 })
