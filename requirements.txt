@@ -1,4 +1,6 @@
 --find-links https://download.pytorch.org/whl/torch_stable.html
-torch===1.6.0
-torchvision===0.7.0
+torch>=1.6.0
+torchvision>=0.7.0
+albumentations>=0.4
+tensorboard>=2.3
 
