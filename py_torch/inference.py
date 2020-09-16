@@ -155,7 +155,7 @@ class TLessTestDataset(data.Dataset):
             self.all_cids[i] = np.array(new_ids, dtype=np.int32)
 
         # produce ground truth annotations
-        create_gt_anns(self.img_ids, self.all_bboxes, self.all_clsids, "./evaluation/gt.json")
+        create_gt_anns(self.img_ids, self.all_bboxes, self.all_cids, "./evaluation/gt.json")
                 
     def __len__(self):
         return len(self.all_rgbpaths)
