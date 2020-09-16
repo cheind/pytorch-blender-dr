@@ -36,7 +36,7 @@ def compute_visfracs(cam, objs, bboxes):
     mask = areas > 0
     ids = np.where(mask)[0]
     for idx in ids:
-        visfrac[idx] = btb.utils.compute_object_visibility(objs[idx], cam, N=50)
+        visfrac[idx] = btb.utils.compute_object_visibility(objs[idx], cam, N=50, dist=20.)
     return visfrac
 
 
