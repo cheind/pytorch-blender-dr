@@ -49,7 +49,7 @@ CLSES_MAP = {old_cls_id: new_cls_id for new_cls_id, group in enumerate(GROUPS)
 
 class Transformation:
 
-    def __init__(self, opt, remap_clses=False):
+    def __init__(self, opt):
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
         self.num_classes = opt.num_classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
@@ -57,17 +57,13 @@ class Transformation:
         # ImageNet stats
         self.mean = opt.mean
         self.std = opt.std
-        self.remap_clses = remap_clses
-
-        shift = 100
 
         transformations = [
-            A.RGBShift(p=0.5, r_shift_limit=shift, g_shift_limit=shift,
-                b_shift_limit=shift),
-            A.RandomBrightness(limit=0.1, p=0.2),
+            A.HueSaturationValue(hue_shift_limit=20, 
+                sat_shift_limit=30, val_shift_limit=20, p=0.5),
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
-            A.Rotate(limit=20, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.2)
+            A.Rotate(limit=20, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.5),
         ] if opt.augment and not opt.test else []
 
         transformations.extend([
@@ -87,7 +83,7 @@ class Transformation:
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
         
     def gen_map(self, shape, xy: np.ndarray, mask=None, sigma=2, cutoff=1e-3, 
-                normalize=False, bleed=True):
+            normalize=False, bleed=True):
         """
         Generates a single belief map of 'shape' for each point in 'xy'.
 
@@ -146,11 +142,9 @@ class Transformation:
         b = b.max(0, keepdims=True)  # 1 x h x w
 
         # focal loss is different if targets aren't exactly 1
-        # pixels are rectangles => if floating point coordinate
-        # isn't exactly on the pixel center => not exactly 1 at 
-        # the discrete positions!! solution: broaden peak
+        # thus make sure that 1s are at discrete pixel positions 
         b[b >= 0.95] = 1
-        return b
+        return b  # 1 x h x w
 
     def item_transform(self, item):
         """
@@ -176,77 +170,9 @@ class Transformation:
 
         h, w = image.shape[:2]
 
-        # # adjust bboxes to pass initial - check_bbox(bbox) - call
-        # # from the albumentations package
-        # # library can't deal with bbox corners outside of the image
-        # x, y, bw, bh = np.split(bboxes, 4, -1)  # each n x 1
-        # x[x < 0] = 0
-        # y[y < 0] = 0
-        # x[x > w] = w
-        # y[y > h] = h
-        # # in the phot realistic blender renders some width and hights are <0 !!
-        # # => clip values
-        # bw = np.clip(bw, 0, w)
-        # bh = np.clip(bh, 0, h)
-        # # bring bbox inside the image to be used with albumentations
-        # bw[x + bw > w] = w - x[x + bw > w]
-        # bh[y + bh > h] = h - y[y + bh > h]
-
-        # mask = np.logical_or(bw == 0, bh == 0).reshape(-1)  # n,
-        # bboxes = np.concatenate((x, y, bw, bh), axis=-1)  # n x 4
-        # bboxes = bboxes[~mask]
-        # note: further processing is done by albumentations, bboxes
-        # are dropped when not satisfying min. area or visibility!
-
-        # print(bboxes.shape)  -> (0,)
-
         # prepare bboxes for transformation
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)
         bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
-
-
-        # import matplotlib.pyplot as plt
-        # try:
-        #     transformed = self.transform_fn(image=image, bboxes=bboxes)
-        # except Exception as e:
-        #     img, bboxes, cids = item['image'], item['bboxes'], item['cids']
-        #     H, W = img.shape[:2]  # img: h x w x 3
-        #     DPI = 96
-        #     fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
-        #     axs = fig.add_axes([0,0,1.0,1.0])
-        #     axs.imshow(img, origin='upper')
-        #     for cid, bbox in zip(cids,bboxes):
-        #         rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
-        #         axs.add_patch(rect)
-        #         axs.text(bbox[0]+10, bbox[1]+10, f'Class {cid.item()}', fontsize=18)
-        #     axs.set_axis_off()
-        #     axs.set_xlim(0,W-1)
-        #     axs.set_ylim(H-1,0)
-
-        #     plt.savefig("./debug/weird_bboxes.png")
-        #     plt.close(fig)
-        #     print(item["bboxes"])
-            
-        #     print(e); raise RuntimeError
-
-
-        # img, bboxes, cids = item['image'], item['bboxes'], item['cids']
-        # H, W = img.shape[:2]  # img: h x w x 3
-        # DPI = 96
-        # fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
-        # axs = fig.add_axes([0,0,1.0,1.0])
-        # axs.imshow(img, origin='upper')
-        # for cid, bbox in zip(cids,bboxes):
-        #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
-        #     axs.add_patch(rect)
-        #     axs.text(bbox[0]+10, bbox[1]+10, f'Class {cid.item()}', fontsize=18)
-        # axs.set_axis_off()
-        # axs.set_xlim(0,W-1)
-        # axs.set_ylim(H-1,0)
-
-        # plt.savefig("./debug/normal_bboxes.png")
-        # plt.close(fig)
-
 
         transformed = self.transform_fn(image=image, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
@@ -273,11 +199,6 @@ class Transformation:
         # the bbox labels help to reassign the correct classes
         cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
 
-        if self.remap_clses:
-            for i, cid in enumerate(cls_id[:len_valid]):
-                # map class ids from e.g. 1 to 30 -> 0 to 5 
-                cls_id[i] = CLSES_MAP[cid]
-
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
         cpt = cpt / self.down_ratio
@@ -301,7 +222,7 @@ class Transformation:
         
         cpt_hm = np.concatenate(cpt_hms, axis=0) 
 
-        item.update({
+        item = {
             "image": image,
             "cpt_hm": cpt_hm,
             "cpt_off": cpt_off,
@@ -309,7 +230,8 @@ class Transformation:
             "cpt_mask": cpt_mask,
             "wh": wh,
             "cls_id": cls_id,
-        })
+        }
+
         return item
 
 
@@ -328,7 +250,7 @@ class TLessTrainDataset(data.Dataset):
         # 000001, 000002,...
         self.all_rgbpaths = []
         self.all_bboxes = []
-        self.all_clsids = []
+        self.all_cids = []
         
         scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
         for scenepath in scenes:
@@ -343,10 +265,7 @@ class TLessTrainDataset(data.Dataset):
                 assert len(paths)==1
                 rgbpath = paths[0]
                 
-                clsids = [int(e['obj_id']) for e in scene_gt[idx]]
-                # bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
-                
-                # CHANGED to bbox_visib
+                cids = [int(e['obj_id']) for e in scene_gt[idx]]
                 bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
 
                 # visib_fract takes the inter-object coverage into account
@@ -356,34 +275,30 @@ class TLessTrainDataset(data.Dataset):
                 # before feeding into albumentation's transformations 
                 visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
                 
-                filtered_bboxes, filtered_clsids = [], []
-                thres = 0.35
-                ###### filter bboxes by visibility:
-                for bbox, cid, vis in zip(bboxes, clsids, visib_fracts):
-                    if vis > thres:
+                filtered_bboxes, filtered_cids = [], []
+               
+                # filter bboxes by visibility:
+                for bbox, cid, vis in zip(bboxes, cids, visib_fracts):
+                    if vis > opt.vis_thres:
                         filtered_bboxes.append(bbox)
-                        filtered_clsids.append(filtered_clsids)
+                        filtered_cids.append(cid)
 
-                bboxes = filtered_bboxes
-                clsinds = filtered_clsids
-                ######
                 if len(bboxes) > 0:  # only add non empty images
                     self.all_rgbpaths.append(rgbpath)
                     # list of n_objs x 4
-                    self.all_bboxes.append(np.array(bboxes))
-                    self.all_clsids.append(np.array(clsids))
+                    self.all_bboxes.append(np.array(filtered_bboxes))
+                    # list of n_objs,
+                    self.all_cids.append(np.array(filtered_cids))
         
         # create image ids for evaluation, each image path has 
         # a unique id
         self.img_ids = list(range(len(self.all_rgbpaths)))
 
         # remap class ids to groups
-        for i in range(len(self.all_clsids)):
+        for i in range(len(self.all_cids)):
             # take the old id and map it to a new one
-            new_ids = [CLSES_MAP[old_id] for old_id in self.all_clsids[i]]
-            self.all_clsids[i] = np.array(new_ids, dtype=np.int32)
-
-        logging.warning("Remapped class ids here, don't remap in 'item_transform' !!")
+            new_ids = [CLSES_MAP[old_id] for old_id in self.all_cids[i]]
+            self.all_cids[i] = np.array(new_ids, dtype=np.int32)
                 
     def __len__(self):
         return len(self.all_rgbpaths)
@@ -395,11 +310,12 @@ class TLessTrainDataset(data.Dataset):
         item = {
             "image": image,  # np.ndarray, h x w x 3
             "bboxes": self.all_bboxes[index],
-            "cids": self.all_clsids[index],
+            "cids": self.all_cids[index],
         }
         
         # build new item dictionary
         item = self.item_transform(item)
+
         return item
 
 
@@ -424,8 +340,8 @@ def iterate(dl):
 
 
 def main(opt):
-    # CARE REMAP CLSES ONLY ON PTB DATA
-    transformation = Transformation(opt, remap_clses=False)
+
+    transformation = Transformation(opt)
     item_transform = transformation.item_transform
 
     with ExitStack() as es:
@@ -458,9 +374,9 @@ def main(opt):
         else:
             # Otherwise we replay from file.
             ds = btt.FileDataset(opt.record_path, item_transform=item_transform)
-            shuffle = False
+            shuffle = True
         
-        ds = TLessTrainDataset(opt.real_train_path, item_transform)
+        ds = TLessTrainDataset(opt.train_path, item_transform)
         logging.info(f"Dataset: {ds.__class__.__name__}")
 
         logging.info(f"Num. of samples: {len(ds)}")
@@ -477,14 +393,9 @@ def main(opt):
 
         # Setup DataLoader: train, validation split
         train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
-            num_workers=opt.worker_instances, shuffle=True)
+            num_workers=opt.worker_instances, shuffle=shuffle)
         val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
             num_workers=opt.worker_instances, shuffle=False)
-
-        if opt.record:
-            print("Generating images of the recorded data...")
-            dl = data.DataLoader(ds, batch_size=4, num_workers=opt.worker_instances, shuffle=False)
-            iterate(dl)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         logging.info(f"On device: {device}")
@@ -493,109 +404,6 @@ def main(opt):
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
 
         loss_fn = CenterLoss()
-
-        if opt.test:  # do inference
-            logging.info(f"Loading model for inference...")
-            model = get_model(heads)
-
-            checkpoint = torch.load(opt.model_path)
-            model.load_state_dict(checkpoint['model_state_dict'])
-            epoch = checkpoint["epoch"]
-            best_loss = checkpoint["loss"]
-
-            logging.info(f"Loaded model from: {opt.model_path}" \
-                f" and trained till epoch: {epoch}")
-
-            model.to(device=device)
-            model.eval()
-
-            # batch size of 1
-            val_dl = data.DataLoader(val_ds, batch_size=1, 
-                num_workers=opt.worker_instances, shuffle=False)
-
-            for i, batch in enumerate(val_dl): 
-                # batch = next(iter(val_dl))  
-                batch = {k: v.to(device=device) for k, v in batch.items()}
-
-                # check if output hm are working correct!
-                # import matplotlib.pyplot as plt
-                # image = batch["image"].squeeze(0).permute(1, 2, 0).detach().cpu().numpy()
-                # fig = plt.figure()
-                # axs = fig.add_axes([0,0,1.0,1.0])
-                # axs.imshow(image, origin="upper")
-                # bboxes = batch["bboxes"].squeeze(0).detach().cpu().numpy()
-                # cids = batch["cids"].squeeze(0).detach().cpu().numpy()
-                # print(cids)
-                # print(transformation.map_cls)
-                # for cid, bbox in zip(cids, bboxes):
-                #     rect = patches.Rectangle(bbox[:2],bbox[2],bbox[3],linewidth=2,edgecolor='r',facecolor='none')
-                #     axs.add_patch(rect)
-                #     axs.text(bbox[0]+10, bbox[1]+10, str(cid.item()), fontsize=18)
-                # j = 0
-                # plt.savefig(f"./debug/multi_{j}.png"); j += 1
-                # for hm in batch["cpt_hm"].squeeze(0):
-                #     hm = hm.detach().cpu().numpy()
-                #     plt.imshow(hm, origin="upper", cmap="Greys", vmin=0, vmax=1)
-                #     plt.savefig(f"./debug/multi_{j}.png"); j += 1
-                # return
-
-                with torch.no_grad():
-                    out = model(batch["image"])
-                    loss, loss_dict = loss_fn(out, batch)
-                    print(loss_dict)
-
-                    dets = decode(out, opt.k)  # 1 x k x 6
-                    dets = filter_dets(dets, opt.thres)
-
-                    image = batch["image"]
-                    dets[..., :4] = dets[..., :4] * opt.down_ratio
-                    render(image, dets, opt, show=False, save=True, 
-                        path=f"./data/{i:05d}pred.png")
-
-                    # # render ground truths
-                    # wh = batch["wh"]  # 1 x n_max x 2
-                    # ind = batch["cpt_ind"]  # 1 x n_max
-                    # off = batch["cpt_off"]  # 1 x n_max x 2
-                    # mask = batch["cpt_mask"].bool()  # 1 x n_max
-
-                    # wh = wh[mask].view(1, -1, 2)  # 1 x n x 2
-                    # off = off[mask].view(1, -1, 2)  # 1 x n x 2
-                    # ind = ind[mask].view(1, -1)  # 1 x n
-                    # empty = torch.zeros(1, 2, 128, 128, dtype=torch.float32).to(device=device)
-                    # # generate output from ground truth
-                    # empty = empty.view(1, 2, -1)  # 1 x num_classes x 128**2
-                    # ind = ind.unsqueeze(1).expand(-1, 2, -1)  # 1 x 2 x n
-                    # wh = wh.permute(0, 2, 1)  # 1 x 2 x n
-                    # off = off.permute(0, 2, 1)  # 1 x 2 x n
-                    # wh = empty.scatter(dim=-1, index=ind, src=wh).view(1, 2, 128, 128)
-                    # off = empty.scatter(dim=-1, index=ind, src=off).view(1, 2 ,128, 128)
-                    
-                    # import matplotlib.pyplot as plt
-                    # image_ = batch["cpt_hm"].squeeze(0).cpu()
-                    # fig = plt.figure()
-                    # axs = fig.add_axes([0,0,1.0,1.0])
-                    # image_ = image_.max(0, keepdims=False)[0]
-                    # axs.imshow(image_, origin="upper")
-                    # plt.savefig("./data/cpt_hm.png")
-
-                    # axs.imshow(wh[0, :, ...].cpu().max(0, keepdims=False)[0], 
-                    #     origin="upper")
-                    # plt.savefig("./data/wh.png")
-
-                    # axs.imshow(off[0, :, ...].cpu().max(0, keepdims=False)[0], 
-                    #     origin="upper")
-                    # plt.savefig("./data/off.png")
-
-                    # out = {"cpt_hm": batch["cpt_hm"],
-                    #        "cpt_off": off, "wh": wh}
-                    # dets = decode(out, opt.k)  # 1 x k x 6
-                    # dets = filter_dets(dets, opt.thres)
-                    # dets[..., :4] = dets[..., :4] * opt.down_ratio
-                    # render(image, dets, opt, show=False, save=True, 
-                    #     path=f"./data/{i:05d}gt.png")
-                break
-
-            return  # exit
 
         if opt.resume:  # resume training
             model = get_model(heads)
@@ -607,6 +415,7 @@ def main(opt):
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
             best_loss = checkpoint["loss"]
             start_epoch = checkpoint["epoch"] + 1
+
         else:  # train from scratch
             model = get_model(heads)
             model.to(device=device)
@@ -656,7 +465,7 @@ def main(opt):
                         'optimizer_state_dict': optimizer.state_dict(),
                     }, f"./models/best_model.pth")
 
-        logging.info("Done training!")
+        logging.info("Finishd training!")
         return  # exit
 
 
