@@ -59,8 +59,9 @@ def main():
     with btt.BlenderLauncher(**launch_args) as bl:
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
-        ds = btt.RemoteIterableDataset(addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.scene}')
-        dl = data.DataLoader(ds, batch_size=4, num_workers=4) # bug when num_workers = 4, the batch size is only one then??
+        ds = btt.RemoteIterableDataset(
+            addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.scene}',timeoutms=30*1000)
+        dl = data.DataLoader(ds, batch_size=4, num_workers=4)
         t = time.time()
         iterate(dl)
         print(f'Finished in {time.time()-t} seconds.')
