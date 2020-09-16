@@ -25,21 +25,6 @@ COLORS = [
 COLORS = np.array(COLORS, dtype=np.float32) / 255
 
 
-def image_from_figure(fig, close=True, dpi=96):
-    io_buf = io.BytesIO()
-    fig.savefig(io_buf, format='raw', dpi=dpi)
-    io_buf.seek(0)
-    # h x w x 4
-    img_arr = np.reshape(np.frombuffer(io_buf.getvalue(), dtype=np.uint8),
-                        newshape=(int(fig.bbox.bounds[3]), int(fig.bbox.bounds[2]), -1))
-    io_buf.close()
-
-    if close:
-        plt.close(fig)
-
-    return img_arr[..., :3]  # h x w x 3
-
-
 def render(image, detections, opt, show=True, 
     save=False, path=None, denormalize=True, ret=False):
     """

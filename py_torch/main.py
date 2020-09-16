@@ -63,8 +63,7 @@ class Transformation:
                 sat_shift_limit=30, val_shift_limit=20, p=0.5),
             A.ChannelShuffle(p=0.5),
             A.HorizontalFlip(p=0.2),
-            A.Rotate(limit=20, border_mode=cv2.BORDER_CONSTANT, value=0, p=0.5),
-        ] if opt.augment and not opt.test else []
+        ] if opt.augment else []
 
         transformations.extend([
             # Rescale an image so that minimum side is equal to max_size,
@@ -164,14 +163,14 @@ class Transformation:
             - wh: n_max x 2, low resolution width, height - [0, 128], [0, 128]
             - cls_id: n_max,
         """
-        image = item["image"]
-        bboxes = item['bboxes']
-        cids = item["cids"]
+        image = item["image"]  # h x w x 3
+        bboxes = item['bboxes']  # n x 4
+        cids = item["cids"]  # n,
 
         h, w = image.shape[:2]
 
         # prepare bboxes for transformation
-        bbox_labels = np.arange(len(bboxes), dtype=np.float32)
+        bbox_labels = np.arange(len(bboxes), dtype=np.float32)  # n,
         bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
 
         transformed = self.transform_fn(image=image, bboxes=bboxes)
@@ -283,7 +282,7 @@ class TLessTrainDataset(data.Dataset):
                         filtered_bboxes.append(bbox)
                         filtered_cids.append(cid)
 
-                if len(bboxes) > 0:  # only add non empty images
+                if len(filtered_bboxes) > 0:  # only add non empty images
                     self.all_rgbpaths.append(rgbpath)
                     # list of n_objs x 4
                     self.all_bboxes.append(np.array(filtered_bboxes))
@@ -339,13 +338,36 @@ def iterate(dl):
         plt.close(fig)
 
 
+def item_filter(func, vis_thres):
+
+    def inner(item):
+        bboxes = item['bboxes']  # n x 4
+        cids = item['cids']  # n,
+        vis = item['visfracs']  # n,
+
+        # visibility filtering
+        mask = (vis > vis_thres)  # n,
+        item["bboxes"] = bboxes[mask]  # n' x 4
+        cids = cids[mask]  # n',
+
+        # remap the class ids to our group assignment
+        new_ids = np.array([CLSES_MAP[old_id] for old_id in cids], dtype=cids.dtype)
+        item["cids"] = new_ids
+
+        item = func(item)  # call the decorated function
+
+        return item
+    
+    return inner
+
+
 def main(opt):
 
     transformation = Transformation(opt)
     item_transform = transformation.item_transform
 
     with ExitStack() as es:
-        if not opt.replay:
+        if opt.stream:
             # Launch Blender instance. Upon exit of this script all Blender instances will be closed.
             bl = es.enter_context(
                 btt.BlenderLauncher(
@@ -360,7 +382,7 @@ def main(opt):
             # Setup a streaming dataset
             ds = btt.RemoteIterableDataset(
                 bl.launch_info.addresses['DATA'],
-                item_transform=item_transform
+                item_transform=item_filter(item_transform, opt.vis_thres)
             )
             # Iterable datasets do not support shuffle
             shuffle = False
@@ -371,14 +393,19 @@ def main(opt):
             # Setup raw recording if desired
             if opt.record:
                 ds.enable_recording(opt.record_path)
-        else:
+        elif opt.replay:
             # Otherwise we replay from file.
-            ds = btt.FileDataset(opt.record_path, item_transform=item_transform)
+            ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
             shuffle = True
-        
-        ds = TLessTrainDataset(opt.train_path, item_transform)
-        logging.info(f"Dataset: {ds.__class__.__name__}")
+        else:
+            # if we stream or replay we need to apply a item filter on the job, whilst
+            # the tless data set is static and thus item filtering (visibility) is done 
+            # beforehand!
+            ds = TLessTrainDataset(opt.train_path, item_transform)
+            shuffle = True
 
+        # Print Dataset stats
+        logging.info(f"Dataset: {ds.__class__.__name__}")
         logging.info(f"Num. of samples: {len(ds)}")
         logging.info(f"Batch size: {opt.batch_size}")
 
@@ -429,43 +456,53 @@ def main(opt):
         # tensorboard --logdir=runs --bind_all
         # bind_all -> when training on e.g. gpu server
 
-        logging.info("Entering trainings loop...")
+        logging.info("Entering trainings loop, open tensorboard to view progress...")
 
-        for epoch in range(start_epoch, opt.num_epochs + start_epoch):
-            meter = train(epoch, model, optimizer, train_dl, 
-                device, loss_fn, writer, opt)
-            
-            total_loss = meter.get_avg("total_loss")
-            logging.info(f"Loss: {total_loss} at epoch: {epoch} / {start_epoch + opt.num_epochs}")
+        logging.info("Attach configuration file content to current tensorboard run...")
+        writer.add_text("Configuration", str(opt), global_step=0)
 
-            torch.save({
-                'loss': best_loss,
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-            }, "./models/model_last.pth")
+        try:
+            for epoch in range(start_epoch, opt.num_epochs + start_epoch):
+                meter = train(epoch, model, optimizer, train_dl, 
+                    device, loss_fn, writer, opt)
+                
+                total_loss = meter.get_avg("total_loss")
+                logging.info(f"Loss: {total_loss} at epoch: {epoch} / {start_epoch + opt.num_epochs}")
 
-            if epoch % opt.save_interval == 0:
                 torch.save({
                     'loss': best_loss,
                     'epoch': epoch,
                     'model_state_dict': model.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
-                }, f"./models/model_{epoch}.pth")
+                }, "./models/model_last.pth")
 
-            if epoch % opt.val_interval == 0:
-                meter = eval(epoch, model, val_dl, device, loss_fn, writer, opt)
-
-                if meter.get_avg("total_loss") <= best_loss:
-                    best_loss = meter.get_avg("total_loss")
+                if epoch % opt.save_interval == 0:
                     torch.save({
                         'loss': best_loss,
                         'epoch': epoch,
                         'model_state_dict': model.state_dict(),
                         'optimizer_state_dict': optimizer.state_dict(),
-                    }, f"./models/best_model.pth")
+                    }, f"./models/model_{epoch}.pth")
 
-        logging.info("Finishd training!")
+                if epoch % opt.val_interval == 0:
+                    meter = eval(epoch, model, val_dl, device, loss_fn, writer, opt)
+
+                    if meter.get_avg("total_loss") <= best_loss:
+                        best_loss = meter.get_avg("total_loss")
+                        torch.save({
+                            'loss': best_loss,
+                            'epoch': epoch,
+                            'model_state_dict': model.state_dict(),
+                            'optimizer_state_dict': optimizer.state_dict(),
+                        }, f"./models/best_model.pth")
+        except KeyboardInterrupt:
+            print("\n")
+            logging.info("Manually stopped training!")
+        finally:
+            logging.info("Attach hyperparameter settings to current tensorboard run...")
+            metrics = {"hparams/best_loss": best_loss}  # best loss on validation set
+            writer.add_hparams(opt.hyperparams, metrics)
+
         return  # exit
 
 
@@ -477,7 +514,45 @@ if __name__ == '__main__':
     opt = Config("./configs/config.txt")
     print(opt)
 
-    opt.mean = np.array(opt.mean, np.float32) 
-    opt.std = np.array(opt.std, np.float32)
+    # Relevant stats for tuning the training
+    hyperparams =  {
+        "batch_size": opt.batch_size,
+        "lr": opt.lr,
+        "weight_decay": opt.weight_decay,
+        "n_max": opt.n_max,  # how many objects are at most possible as GT objects?
+        "augment": opt.augment,  # augmented or not?
+        "train_path": opt.train_path,  # which data was used?
+    }
+
+    """ BUG in tensorboard? -> doesnt show string or ALL float/int values?? AND a new run is made even if my key is UNIQUE DOCS:
+        add_hparams(self, hparam_dict, metric_dict)
+    |      Add a set of hyperparameters to be compared in TensorBoard.
+    |
+    |      Args:
+    |          hparam_dict (dict): Each key-value pair in the dictionary is the
+    |            name of the hyper parameter and it's corresponding value.
+    |            The type of the value can be one of `bool`, `string`, `float`,
+    |            `int`, or `None`.
+    |          metric_dict (dict): Each key-value pair in the dictionary is the
+    |            name of the metric and it's corresponding value. Note that the key used
+    |            here should be unique in the tensorboard record. Otherwise the value
+    |            you added by ``add_scalar`` will be displayed in hparam plugin. In most
+    |            cases, this is unwanted.
+    |
+    |      Examples::
+    |
+    |          from torch.utils.tensorboard import SummaryWriter
+    |          with SummaryWriter() as w:
+    |              for i in range(5):
+    |                  w.add_hparams({'lr': 0.1*i, 'bsize': i},
+    |                                {'hparam/accuracy': 10*i, 'hparam/loss': 10*i})
+    |
+    |      Expected result:
+    |
+    |      .. image:: _static/img/tensorboard/add_hparam.png
+    |         :scale: 50 %
+    """
+
+    setattr(opt, "hyperparams", hyperparams)
 
     main(opt)

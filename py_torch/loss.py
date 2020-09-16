@@ -8,7 +8,7 @@ def _sigmoid(x):
     Clamping values, therefore this activation function can
     be used with Focal Loss.
     """
-    y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
+    y = torch.clamp(torch.sigmoid(x), min=1e-4, max=1-1e-4)
     return y
 
 

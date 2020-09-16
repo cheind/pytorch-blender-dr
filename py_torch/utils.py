@@ -1,6 +1,7 @@
 # https://github.com/KaiyangZhou/Dassl.pytorch
 from collections import defaultdict
 import torch
+import numpy as np
 
 # to redirect evaluations
 import sys
@@ -124,6 +125,8 @@ class Config(object):
                 is_float = True if '.' in v else False
                 v = v.strip()[1:-1].split(',')
                 v = list(map(float if is_float else int, v))
+                dtype = np.float32 if is_float else np.int32
+                v = np.array(v, dtype=dtype)
             elif '/' in v:  # parse paths
                 pass
             else:  # parse integer, floating point or string values
@@ -141,8 +144,11 @@ class Config(object):
     def __repr__(self):
         info = []
         for k, v in self.__dict__.items():
-            info.append(f"{k}: {v}\n")
-        return "".join(info)
+            info.append(f"{k}: {v}")
+        return "  \n".join(info)  # two blank spaces to be used as tensorboard text too!
+
+    def __str__(self):
+        return self.__repr__()
 
 
 if __name__ == "__main__":

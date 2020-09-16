@@ -11,11 +11,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils import data
 
+# git clone https://github.com/cheind/pytorch-blender.git <DST>
+# pip install -e <DST>/pkg_pytorch
+from blendtorch import btt
+
 from .utils import Config, FileStream
 from .model import get_model
 from .decode import decode, filter_dets
 from .visu import render
-from .main import CLSES_MAP
+from .main import CLSES_MAP, item_filter
 from .evaluation import create_gt_anns, evaluate
 
 
@@ -137,7 +141,7 @@ class TLessTestDataset(data.Dataset):
                         filtered_bboxes.append(bbox)
                         filtered_cids.append(cid)
 
-                if len(bboxes) > 0:  # only add non empty images
+                if len(filtered_bboxes) > 0:  # only add non empty images
                     self.all_rgbpaths.append(rgbpath)
                     # list of n_objs x 4
                     self.all_bboxes.append(np.array(filtered_bboxes))
@@ -185,8 +189,13 @@ def main(opt):
     item_transform = transformation.item_transform
 
     # Setup Dataset
-    ds = TLessTestDataset(opt.inference_path, item_transform)
-    logging.info(f"Real data set size: {len(ds)}")
+    if opt.replay:
+        ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
+        # BUG: KeyError: 'image_id' klarerweise
+    else:
+        ds = TLessTestDataset(opt.inference_path, item_transform)
+    
+    logging.info(f"Data set size: {len(ds)}")
 
     # Setup DataLoader
     dl = data.DataLoader(ds, batch_size=1, num_workers=opt.worker_instances, shuffle=False)
@@ -274,9 +283,6 @@ if __name__ == '__main__':
 
     opt = Config("./configs/config.txt")
     print(opt)
-
-    opt.mean = np.array(opt.mean, np.float32) 
-    opt.std = np.array(opt.std, np.float32)
 
     main(opt)
 
