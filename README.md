@@ -43,5 +43,14 @@ conda activate icpr
 pip install -r requirements.txt
 ```
 
+```
+git clone https://github.com/cheind/pytorch-blender.git <DST>
+pip install -e <DST>/pkg_pytorch
+edit configs/config.txt
+python -m py_torch.main
+tensorboard --logdir runs --bind_all
+model in models (model_last.pth / model_best.pth)
+
+```
 ## Evaluation
 TODO
