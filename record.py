@@ -14,7 +14,7 @@ def draw_image(ax, img, cids, bboxes, visfracs, min_visfrac):
             ax.add_patch(rect)
             ax.text(bbox[0]-10, bbox[1]+10, f'C:{cid.item()}, V:{vfrac:.2f}', fontsize=8)
 
-def iterate(dl, min_visfrac=0.5):
+def iterate(dl, min_visfrac=0.2):
     DPI=96
     for step, item in enumerate(dl):
         if step % 100 == 0:
@@ -45,7 +45,7 @@ def main():
     launch_args = dict(
         scene=Path(__file__).parent/'blender'/args.scene/f'{args.scene}.blend',
         script=Path(__file__).parent/'blender'/args.scene/f'{args.scene}.blend.py',
-        num_instances=args.num_instances, 
+        num_instances=args.num_instances,
         named_sockets=['DATA'],
     )
 
