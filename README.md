@@ -35,7 +35,13 @@ python record.py --help
 for more options.
 
 ## Training
-TODO
+
+Create a new Conda environment
+```
+conda create -n icpr python==3.7 pip
+conda activate icpr
+pip install -r requirements.txt
+```
 
 ## Evaluation
 TODO
