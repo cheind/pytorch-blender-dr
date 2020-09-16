@@ -3,4 +3,6 @@ torch>=1.6.0
 torchvision>=0.7.0
 albumentations>=0.4
 tensorboard>=2.3
+tqdm>=4.40
+pycocotools>=2.0
 

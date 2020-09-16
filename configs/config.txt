@@ -9,19 +9,19 @@ record_path: /mnt/data/20200908_TLess/tless
 record: False
 
 # Relevant for testing, inference or resuming of training
-model_path: ./models/model_last_1ep.pth
-
-real_train_path: /mnt/data/tless_train_pbr
+model_path: ./models/model_last.pth
 
 # Inference
-thres: 0.5
-k: 20
-test: False
+# real: /mnt/data/tless_test_real/test_primesense
+# photo realistic: /mnt/data/tless_train_pbr
 
-# Real TlessRealDataset path
-real_path: /mnt/data/tless_test_real/test_primesense
+inference_path: /mnt/data/tless_test_real/test_primesense
+model_thres: 0.5
+render_dets: False
+k: 20
 
 # Data
+vis_thres: 0.35
 down_ratio: 4
 mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]
@@ -32,19 +32,26 @@ n_max: 25
 augment: False
 
 # Training
-train_vis_interval: 200
-val_vis_interval: 20
-resume: False
-num_epochs: 4
-batch_size: 16
-# 1.25e-4
-lr: 1.0e-3
-# 1.0e-2
-weight_decay: 0
+# real: /mnt/data/tless_test_real/test_primesense
+# photo realistic: /mnt/data/tless_train_pbr
+
+train_path: /mnt/data/tless_train_pbr
+
 val_interval: 1
 save_interval: 200
+
+train_vis_interval: 200
+val_vis_interval: 20
+
+resume: False
+
+num_epochs: 4
+batch_size: 16
+
+lr: 1.25e-4
+weight_decay: 1.0e-3
 
 # System
 blend_path: C:/Program Files/Blender Foundation/Blender 2.90
 blender_instances: 2
-worker_instances: 0
+worker_instances: 4

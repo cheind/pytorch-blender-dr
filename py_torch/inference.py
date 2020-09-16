@@ -84,7 +84,7 @@ class Transformation:
         return item
 
 
-class TLessDataset(data.Dataset):
+class TLessTestDataset(data.Dataset):
     """Provides access to images, bboxes and classids for TLess real dataset.
     
     Download dataset
@@ -95,7 +95,7 @@ class TLessDataset(data.Dataset):
     https://github.com/thodan/bop_toolkit/blob/master/docs/bop_datasets_format.md
     """
 
-    def __init__(self, basepath, gt_json_path, item_transform=None):
+    def __init__(self, basepath, item_transform=None):
 
         self.basepath = Path(basepath)
         self.item_transform = item_transform
@@ -104,7 +104,7 @@ class TLessDataset(data.Dataset):
         # 000001, 000002,...
         self.all_rgbpaths = []
         self.all_bboxes = []
-        self.all_clsids = []
+        self.all_cids = []
         
         scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
         for scenepath in scenes:
@@ -119,10 +119,7 @@ class TLessDataset(data.Dataset):
                 assert len(paths)==1
                 rgbpath = paths[0]
                 
-                clsids = [int(e['obj_id']) for e in scene_gt[idx]]
-                # bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
-                
-                # CHANGED to bbox_visib
+                cids = [int(e['obj_id']) for e in scene_gt[idx]]
                 bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
 
                 # visib_fract takes the inter-object coverage into account
@@ -132,36 +129,33 @@ class TLessDataset(data.Dataset):
                 # before feeding into albumentation's transformations 
                 visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
                 
-                filtered_bboxes, filtered_clsids = [], []
-                thres = 0.35
-                ###### filter bboxes by visibility:
-                for bbox, cid, vis in zip(bboxes, clsids, visib_fracts):
-                    if vis > thres:
+                filtered_bboxes, filtered_cids = [], []
+               
+                # filter bboxes by visibility:
+                for bbox, cid, vis in zip(bboxes, cids, visib_fracts):
+                    if vis > opt.vis_thres:
                         filtered_bboxes.append(bbox)
-                        filtered_clsids.append(filtered_clsids)
+                        filtered_cids.append(cid)
 
-                bboxes = filtered_bboxes
-                clsinds = filtered_clsids
-                ######
                 if len(bboxes) > 0:  # only add non empty images
                     self.all_rgbpaths.append(rgbpath)
                     # list of n_objs x 4
-                    self.all_bboxes.append(np.array(bboxes))
-                    self.all_clsids.append(np.array(clsids))
+                    self.all_bboxes.append(np.array(filtered_bboxes))
+                    # list of n_objs,
+                    self.all_cids.append(np.array(filtered_cids))
         
         # create image ids for evaluation, each image path has 
         # a unique id
         self.img_ids = list(range(len(self.all_rgbpaths)))
 
         # remap class ids to groups
-        for i in range(len(self.all_clsids)):
+        for i in range(len(self.all_cids)):
             # take the old id and map it to a new one
-            new_ids = [CLSES_MAP[old_id] for old_id in self.all_clsids[i]]
-            self.all_clsids[i] = np.array(new_ids, dtype=np.int32)
+            new_ids = [CLSES_MAP[old_id] for old_id in self.all_cids[i]]
+            self.all_cids[i] = np.array(new_ids, dtype=np.int32)
 
         # produce ground truth annotations
-        create_gt_anns(self.img_ids, self.all_bboxes, 
-            self.all_clsids, gt_json_path)
+        create_gt_anns(self.img_ids, self.all_bboxes, self.all_cids, "./evaluation/gt.json")
                 
     def __len__(self):
         return len(self.all_rgbpaths)
@@ -173,8 +167,7 @@ class TLessDataset(data.Dataset):
         item = {
             "image": image,  # np.ndarray, h x w x 3
             "bboxes": self.all_bboxes[index],
-            "cids": self.all_clsids[index],
-            # for evaluation of the AP
+            "cids": self.all_cids[index],
             "image_id": index,
             }
         # update the item dictionary
@@ -192,14 +185,7 @@ def main(opt):
     item_transform = transformation.item_transform
 
     # Setup Dataset
-    gt_json_path = "./evaluation/gt.json"
-    pred_json_path = "./evaluation/pred.json"
-
-    # select tless path:
-    path = opt.real_path
-    #path = 
-
-    ds = TLessDataset(path, gt_json_path, item_transform)
+    ds = TLessTestDataset(opt.inference_path, item_transform)
     logging.info(f"Real data set size: {len(ds)}")
 
     # Setup DataLoader
@@ -207,15 +193,22 @@ def main(opt):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    # Setup Model
+    logging.info("Loading model for inference...")
     checkpoint = torch.load(opt.model_path)
-    logging.info(f"Loading model form: {opt.model_path}")
+
     heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
     model = get_model(heads)
+
     epoch = checkpoint["epoch"]
+    best_loss = checkpoint["loss"]
     model.load_state_dict(checkpoint['model_state_dict'])
+
     model.to(device=device)
     model.eval()
-    logging.info(f"Loaded model from epoch: {epoch}")
+
+    logging.info(f"Loaded model from: {opt.model_path}" \
+                f" trained till epoch: {epoch} with best loss: {best_loss}")
 
     pred = []
     with torch.no_grad():
@@ -224,26 +217,30 @@ def main(opt):
 
             out = model(batch["image"])  # 1 x 3 x h x w
             dets = decode(out, opt.k)  # 1 x k x 6
-            dets = filter_dets(dets, opt.thres)  # 1 x k' x 6
+            dets = filter_dets(dets, opt.model_thres)  # 1 x k' x 6
 
             image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
             dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
 
             shape_pp = batch["shape_pp"]  # 1 x 2
             h_gt, w_gt = image_gt.size(1), image_gt.size(2)
-            h_pp, w_pp = shape_pp[0]  # pre padded image height and width
+
+            # Pre padded image height and width
+            h_pp, w_pp = shape_pp[0]  
             x_scale = w_gt / w_pp
             y_scale = h_gt / h_pp
-            # scale bboxes to match original image space
+
+            # Scale bboxes to match original image space
             dets[..., 0] *= x_scale  # x
             dets[..., 1] *= y_scale  # y
             dets[..., 2] *= x_scale  # w
             dets[..., 3] *= y_scale  # h
 
-            # render(image_gt, dets, opt, show=False, save=True, 
-            #     path=f"./data/{i:05d}.png", denormalize=False)
+            if opt.render_dets:
+                render(image_gt, dets, opt, show=False, save=True, 
+                    path=f"./data/{i:05d}.png", denormalize=False)
 
-            # create json results for AP evaluation
+            # Create json results for AP evaluation
             image_id = int(batch["image_id"])
             dets = dets.squeeze(0).cpu().numpy()  # k' x 6
 
@@ -259,12 +256,14 @@ def main(opt):
                     "score": _to_float(score),
                 })
         
-    # save json results for evaluation
-    json.dump(pred, open(pred_json_path, "w"))
+    # Save json results for evaluation
+    json.dump(pred, open("./evaluation/pred.json", "w"))
 
+    # Save console output
     with FileStream('./evaluation/AP.txt', parser=lambda x: x):
-        evaluate(gt_json_path, pred_json_path)
+        evaluate("./evaluation/gt.json", "./evaluation/pred.json")
     
+    logging.info("Finishd inference!")
     return  # exit
 
 

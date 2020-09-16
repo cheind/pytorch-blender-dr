@@ -40,76 +40,6 @@ def image_from_figure(fig, close=True, dpi=96):
     return img_arr[..., :3]  # h x w x 3
 
 
-def tless_visu(item: dict, step, thres=0.3):
-    """
-    item = {
-        "image": image,  # np.ndarray, h x w x 3
-        "bboxes": self.all_bboxes[index],
-        "cids": self.all_clsids[index],
-        "bboxes_visib": self.all_bboxes_visib[index],
-        "visib_fracts": self.all_visib_fracts[index]
-    }
-    """
-    image = item["image"]
-    bboxes = item["bboxes"]
-    cids = item["cids"]
-    bboxes_visib = item["bboxes_visib"]
-    visib_fracts = item["visib_fracts"]
-
-    h, w = image.shape[:2]
-    DPI = 96
-    fig = plt.figure(frameon=False, figsize=(2 * w/DPI, h/DPI), dpi=DPI)
-    axs = [fig.add_axes([0,0,0.5,0.5]), fig.add_axes([0.5,0.0,0.5,0.5])]
-
-    axs[0].imshow(image, origin='upper')
-    for bbox, cid, visib_fract in zip(bboxes, cids, visib_fracts):
-        col = COLORS[int(cid)]
-        rect = patches.Rectangle(bbox[:2], bbox[2], bbox[3],
-                                 linewidth=2, edgecolor=col, 
-                                 facecolor='none')
-        rect.set_path_effects([
-            path_effects.Stroke(linewidth=2, foreground="white"),
-            path_effects.Normal()
-        ])
-        axs[0].add_patch(rect)
-        text = axs[0].text(bbox[0] + 10, bbox[1] + 10, f"{cid} {visib_fract:.3f}",
-                        fontsize=12, color=col)
-        text.set_path_effects([
-            path_effects.Stroke(linewidth=2, foreground="white"),
-            path_effects.Normal()
-        ])
-    
-    axs[1].imshow(image, origin='upper')
-    for bbox, cid, visib_fract in zip(bboxes_visib, cids, visib_fracts):
-        if visib_fract < thres:
-            continue
-        col = COLORS[int(cid)]
-        rect = patches.Rectangle(bbox[:2], bbox[2], bbox[3],
-                                 linewidth=2, edgecolor=col, 
-                                 facecolor='none')
-        rect.set_path_effects([
-            path_effects.Stroke(linewidth=2, foreground="white"),
-            path_effects.Normal()
-        ])
-        axs[1].add_patch(rect)
-        text = axs[1].text(bbox[0] + 10, bbox[1] + 10, f"{cid} {visib_fract:.3f}",
-                        fontsize=12, color=col)
-        text.set_path_effects([
-            path_effects.Stroke(linewidth=2, foreground="white"),
-            path_effects.Normal()
-        ])
-
-    for i in range(len(axs)):
-        axs[i].set_axis_off()
-        axs[i].set_xlim(0,w-1)
-        axs[i].set_ylim(h-1,0)
-
-    fn = f'./debug/visu_{step}.png'
-    fig.savefig(fn)
-    logging.info(f"Saved image at: {fn}")
-    plt.close(fig)
-
-
 def render(image, detections, opt, show=True, 
     save=False, path=None, denormalize=True, ret=False):
     """
@@ -148,7 +78,6 @@ def render(image, detections, opt, show=True,
         ])
         axs.add_patch(rect)
         text = axs.text(bbox[0] + 10, bbox[1] + 10, f"{cid} {score:.3f}",
-                        #f"{score:.3f}",
                         fontsize=12, color=col)
         text.set_path_effects([
             path_effects.Stroke(linewidth=2, foreground="white"),
@@ -157,7 +86,7 @@ def render(image, detections, opt, show=True,
 
     if save:
         fig.savefig(path)
-        logging.info(f"Figure saved under: {path}")
+        logging.info(f"Saved at: {path}")
     if show:
         plt.show()
     if ret:
