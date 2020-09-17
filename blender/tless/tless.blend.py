@@ -29,7 +29,7 @@ def main():
         with open(otherargs.json_config, 'r') as fp:
             cfg = json.loads(fp.read())
     else:
-        cfg = DEFAULT_CONFIG    
+        cfg = DEFAULT_CONFIG        
 
     objs, occs = None, None
     def pre_anim():
@@ -55,11 +55,14 @@ def main():
                     theta_range=cfg['camera.theta_range']
                 )
                 cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
+                pass
 
     def post_anim(anim):
         nonlocal objs, occs
-        scene.remove_objects()
+        scene.remove_objects(objs, occs)
         objs, occs = None, None
+
+    
         
     # Make sure every Blender has its own random seed
     np.random.seed(btargs.btseed)

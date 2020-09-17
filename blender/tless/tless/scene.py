@@ -1,11 +1,18 @@
 import bpy
 import numpy as np
 import supershape as sshape
+from .config import DEFAULT_CONFIG
 
 SCN = bpy.context.scene
 LAYER = bpy.context.view_layer
 
-from .config import DEFAULT_CONFIG
+OCC_SHAPE = (50,50)
+def create_occluder_template():
+    shape=OCC_SHAPE
+    new_obj = sshape.make_bpy_mesh(shape, name='occ', coll=False)
+    new_obj.use_fake_user = True
+    return new_obj
+OCC = create_occluder_template()
 
 def randomize_bsdf_material(mat, basecolor=None):
     bsdf = mat.node_tree.nodes.get("Principled BSDF") 
@@ -52,7 +59,10 @@ def create_object(cfg=DEFAULT_CONFIG):
     c = np.random.choice(ids, p=p)
     
     new_obj = templates[c].copy()
-    new_obj.data = templates[c].data.copy()
+    #new_obj.data = templates[c].data.copy()
+    #new_obj.modifiers.clear()
+    #new_obj.constraints.clear()
+    new_obj.animation_data_clear()
     
     intensity = np.random.uniform(*cfg['scene.object_intensity_range'])
     new_obj.active_material = create_bsdf_material((intensity, intensity, intensity))
@@ -60,15 +70,20 @@ def create_object(cfg=DEFAULT_CONFIG):
     
     new_obj.location = np.random.uniform(low=cfg['scene.object_location_bbox'][0],high=cfg['scene.object_location_bbox'][1],size=(3))
     new_obj.rotation_euler = np.random.uniform(low=cfg['scene.object_rotation_range'][0], high=cfg['scene.object_rotation_range'][1],size=(3))
+    try:
+        SCN.rigidbody_world.collection.objects.link(new_obj)
+    except:
+        pass
     return new_obj
     
 def create_occluder(cfg=DEFAULT_CONFIG):
     coll = SCN.collection.children['Occluders']
-    
-    shape=(50,50)
-    new_obj = sshape.make_bpy_mesh(shape, name='occ', coll=coll)
+
+    new_obj = OCC.copy()
+    new_obj.data = OCC.data.copy()
     new_obj.active_material = create_bsdf_material()
-    
+    coll.objects.link(new_obj)
+        
     params = np.random.uniform(
         low =[0.00,1,1,0.0,0.0, 0.0],
         high=[20.00,1,1,40,10.0,10.0],
@@ -76,23 +91,37 @@ def create_occluder(cfg=DEFAULT_CONFIG):
     )
     
     scale = np.random.uniform(0.1, 0.6, size=3)    
-    x,y,z = sshape.supercoords(params, shape=shape)    
+    x,y,z = sshape.supercoords(params, shape=OCC_SHAPE)    
     sshape.update_bpy_mesh(x*scale[0], y*scale[1], z*scale[2], new_obj)
     
     new_obj.location = np.random.uniform(low=[-2, -2, 3],high=[2,2,6],size=(3))
-    new_obj.rotation_euler = np.random.uniform(low=-np.pi, high=np.pi,size=(3))    
+    new_obj.rotation_euler = np.random.uniform(low=-np.pi, high=np.pi,size=(3))
     SCN.rigidbody_world.collection.objects.link(new_obj)
     
     return new_obj
 
-def remove_objects():
+def remove_objects(objs, occs):
     coll = SCN.collection.children['Generated']
-    for o in coll.objects:
+
+    mats = []
+    for o in objs:
+        o.data.materials.clear()
+        SCN.rigidbody_world.collection.objects.unlink(o)                
         bpy.data.objects.remove(o, do_unlink=True)
-    coll = SCN.collection.children['Occluders']
-    for o in coll.objects:
+
+    for o in occs:
+        o.data.materials.clear()
+        SCN.rigidbody_world.collection.objects.unlink(o) 
         bpy.data.objects.remove(o, do_unlink=True)
-    bpy.ops.outliner.orphans_purge()
+    
+    for m in list(bpy.data.materials):
+        if m.users == 0:
+            bpy.data.materials.remove(m, do_unlink=True)          
+
+    for m in list(bpy.data.meshes):
+        if m.users == 0:
+            bpy.data.meshes.remove(m, do_unlink=True)    
+    #bpy.ops.outliner.orphans_purge()
 
 def apply_physics_to(objs, enabled=False, collision_shape='BOX', friction=0.5, linear_damp=0.05, angular_damp=0.1):
     for obj in objs:
@@ -108,9 +137,11 @@ def create_scene(cfg=DEFAULT_CONFIG):
 
     objs = [create_object(cfg) for _ in range(N)]
     occs = [create_occluder(cfg) for _ in range(M)]
+
     
     apply_physics_to(
         objs,
+        collision_shape='BOX',
         enabled=True,
         linear_damp=cfg['physics.linear_damp'],
         friction=cfg['physics.friction'],
