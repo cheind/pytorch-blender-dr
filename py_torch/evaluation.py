@@ -7,12 +7,12 @@ import time
 from .main import CATEGORIES
 
 
-def create_gt_anns(image_ids, all_bboxes, all_category_ids, 
+def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids, 
     path):
     """Create ground truth annotations for evaluation. 
 
     Args:
-        image_ids (list): each image has a unique id
+        rbg_relpaths (list): relative paths to image files
         all_bboxes (list): bboxes for each image
         all_category_ids (list): class ids for bboxes  
         path (str): path of annotations file. 
@@ -27,8 +27,8 @@ def create_gt_anns(image_ids, all_bboxes, all_category_ids,
 
     start_time = time.time()
 
-    for image_id, bboxes, category_ids in zip(image_ids, all_bboxes, all_category_ids):
-        images.append({"id": int(image_id)})
+    for image_id, (fpath, bboxes, category_ids) in enumerate(zip(rbg_relpaths, all_bboxes, all_category_ids)):
+        images.append({"id": int(image_id), "file_name": str(fpath)})
 
         is_crowd = 0  # crowd annotation? NO! => 0
 
