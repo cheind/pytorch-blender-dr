@@ -2,6 +2,7 @@ from pathlib import Path
 from torch.utils import data
 from blendtorch import btt
 import time
+import numpy as np
 
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -14,11 +15,24 @@ def draw_image(ax, img, cids, bboxes, visfracs, min_visfrac):
             ax.add_patch(rect)
             ax.text(bbox[0]-10, bbox[1]+10, f'C:{cid.item()}, V:{vfrac:.2f}', fontsize=8)
 
+def update_elapsed(elapsed):
+    fig, axs = plt.subplots()
+    plt.plot(np.arange(len(elapsed)), elapsed)
+    fig.savefig(f'./tmp/elapsed.png')
+    plt.close(fig)
+
 def iterate(dl, min_visfrac=0.2):
     DPI=96
+    tlast = time.time()
+    times = []
     for step, item in enumerate(dl):
-        if step % 100 == 0:
-            print(f'Received batch #{step:05d}')
+        if step % 100 == 0:                      
+            elapsed = (time.time()-tlast)
+            print(f'Received batch #{step:05d}, took {elapsed:.2f} secs since last.')
+            times.append(elapsed)
+            tlast = time.time()
+            update_elapsed(times)
+
             img, bboxes, cids, visfracs = item['image'], item['bboxes'], item['cids'], item['visfracs']
             H,W = img.shape[1], img.shape[2]
             fig = plt.figure(frameon=False, figsize=(W*2/DPI,H*2/DPI), dpi=DPI)
@@ -29,8 +43,7 @@ def iterate(dl, min_visfrac=0.2):
                 axs[i].set_xlim(0,W-1)
                 axs[i].set_ylim(H-1,0)
             fig.savefig(f'./tmp/output_{step}.png')
-            plt.close(fig)
-            
+            plt.close(fig)  
 
 def main():
     import argparse
