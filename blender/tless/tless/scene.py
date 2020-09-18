@@ -1,6 +1,8 @@
 import bpy
+import bmesh
 import numpy as np
 import supershape as sshape
+from blendtorch import btb
 from .config import DEFAULT_CONFIG
 
 SCN = bpy.context.scene
@@ -74,7 +76,7 @@ def create_object(cfg=DEFAULT_CONFIG):
         SCN.rigidbody_world.collection.objects.link(new_obj)
     except:
         pass
-    return new_obj
+    return new_obj, c
     
 def create_occluder(cfg=DEFAULT_CONFIG):
     coll = SCN.collection.children['Occluders']
@@ -104,7 +106,7 @@ def remove_objects(objs, occs):
     coll = SCN.collection.children['Generated']
 
     mats = []
-    for o in objs:
+    for (o,c) in objs:
         o.data.materials.clear()
         SCN.rigidbody_world.collection.objects.unlink(o)                
         bpy.data.objects.remove(o, do_unlink=True)
@@ -140,7 +142,7 @@ def create_scene(cfg=DEFAULT_CONFIG):
 
     
     apply_physics_to(
-        objs,
+        [o[0] for o in objs],
         collision_shape='BOX',
         enabled=True,
         linear_damp=cfg['physics.linear_damp'],
@@ -158,3 +160,50 @@ def create_scene(cfg=DEFAULT_CONFIG):
     randomize_box_material(cfg)
         
     return objs, occs
+
+def simplified_templates(num_target_faces=200):
+    tcoll = SCN.collection.children['Objects']
+    gcoll = SCN.collection.children['Generated']
+
+    templates = list(tcoll.objects)
+    simplified = []
+    bm = bmesh.new()
+    for t in templates:
+
+        bm.from_mesh(t.data)
+        res = bmesh.ops.convex_hull(bm, input=bm.verts)
+        bmesh.ops.delete(bm, geom=res['geom_interior'], context='VERTS') 
+        bmesh.ops.delete(bm, geom=res['geom_unused'], context='VERTS')
+        bmesh.ops.delete(bm, geom=res['geom_holes'], context='VERTS')
+        bmesh.ops.remove_doubles(bm, verts=bm.verts, dist=0.01)
+        bmesh.ops.join_triangles(
+            bm, faces=bm.faces, cmp_seam=False, cmp_sharp=False, 
+            cmp_uvs=False, cmp_vcols=False, cmp_materials=False, 
+            angle_face_threshold=0.698132, angle_shape_threshold=0.698132)
+
+        ch = bpy.data.meshes.new("%s convexhull" % t.name)
+        bm.to_mesh(ch)
+        o = t.copy()
+        o.data = ch        
+        mod = o.modifiers.new('DecimateMod','DECIMATE')
+        print(len(o.data.polygons), num_target_faces/len(o.data.polygons))
+        mod.decimate_type='COLLAPSE'
+        mod.ratio = num_target_faces/len(o.data.polygons)
+        mod.use_symmetry = False
+        mod.use_collapse_triangulate = True        
+        gcoll.objects.link(o)
+        simplified.append(o)
+        bm.clear()
+    bm.free()
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    all_xyz = []
+    for s in simplified:
+        s_eval = s.evaluated_get(depsgraph)
+        xyz = btb.utils.object_coordinates(s_eval)
+        all_xyz.append(xyz)
+        print(len(s_eval.data.polygons), xyz.shape)
+        del s_eval
+        #bpy.data.meshes.remove(s.data)
+        bpy.data.objects.remove(s, do_unlink=True)
+    return all_xyz

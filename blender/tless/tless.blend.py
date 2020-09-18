@@ -42,7 +42,7 @@ def main():
             # we generate N images from the same scene using 
             # random camera poses.       
             for _ in range(cfg['camera.num_images']):
-                bboxes = annotation.bboxes(cam, objs)
+                bboxes = annotation.bboxes(cam, objs, simplified_geoms)
                 visfracs = annotation.compute_visfracs(cam, objs, bboxes)
                 pub.publish(
                     image=off.render(), 
@@ -62,7 +62,8 @@ def main():
         scene.remove_objects(objs, occs)
         objs, occs = None, None
 
-    
+    # bbox 
+    simplified_geoms = scene.simplified_templates(num_target_faces=300)
         
     # Make sure every Blender has its own random seed
     np.random.seed(btargs.btseed)
