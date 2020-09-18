@@ -395,7 +395,7 @@ def main(opt):
                 ds.enable_recording(opt.record_path)
         elif opt.replay:
             # Otherwise we replay from file.
-            ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
+            ds = btt.FileDataset(opt.train_path, item_transform=item_filter(item_transform, opt.vis_thres))
             shuffle = True
         else:
             # if we stream or replay we need to apply a item filter on the job, whilst
