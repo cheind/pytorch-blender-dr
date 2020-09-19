@@ -253,41 +253,18 @@ class TLessTrainDataset(data.Dataset):
         
         scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
         for scenepath in scenes:
-            with open(scenepath / 'scene_gt.json', 'r') as fp:
-                scene_gt = json.loads(fp.read())
-            with open(scenepath / 'scene_gt_info.json', 'r') as fp:
-                scene_gt_info = json.loads(fp.read())
+            is_bop_format = (scenepath / 'scene_gt.json').exists()
+            is_old_format = (scenepath / 'gt.yml').exists()
+            assert is_bop_format or is_old_format, 'Cannot determine format.'
+            
+            if is_bop_format:
+                rgbpaths, bboxes, clsids = self._parse_bop_scene(scenepath, 0.3)
+            else:
+                rgbpaths, bboxes, clsids = self._parse_old_format(scenepath, 0.3)
                 
-            for idx in scene_gt.keys():
-                paths = [scenepath / 'rgb' / f'{int(idx):06d}.{ext}' for ext in ['png', 'jpg']]
-                paths = [p for p in paths if p.exists()]
-                assert len(paths)==1
-                rgbpath = paths[0]
-                
-                cids = [int(e['obj_id']) for e in scene_gt[idx]]
-                bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
-
-                # visib_fract takes the inter-object coverage into account
-                # thus we can avoid bboxes of covered objects
-                # AND by taking the bbox_visib ones we have all bbox edges 
-                # INSIDE of the image and hence no further preprocessing needed
-                # before feeding into albumentation's transformations 
-                visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
-                
-                filtered_bboxes, filtered_cids = [], []
-               
-                # filter bboxes by visibility:
-                for bbox, cid, vis in zip(bboxes, cids, visib_fracts):
-                    if vis > opt.vis_thres:
-                        filtered_bboxes.append(bbox)
-                        filtered_cids.append(cid)
-
-                if len(filtered_bboxes) > 0:  # only add non empty images
-                    self.all_rgbpaths.append(rgbpath)
-                    # list of n_objs x 4
-                    self.all_bboxes.append(np.array(filtered_bboxes))
-                    # list of n_objs,
-                    self.all_cids.append(np.array(filtered_cids))
+            self.all_rgbpaths.extend(rgbpaths)
+            self.all_bboxes.extend(bboxes)
+            self.all_clsids.extend(clsids)
         
         # create image ids for evaluation, each image path has 
         # a unique id
@@ -316,6 +293,77 @@ class TLessTrainDataset(data.Dataset):
         item = self.item_transform(item)
 
         return item
+
+    def _parse_bop_scene(self, scenepath, vis_threshold):
+        with open(scenepath / 'scene_gt.json', 'r') as fp:
+            scene_gt = json.loads(fp.read())
+        with open(scenepath / 'scene_gt_info.json', 'r') as fp:
+            scene_gt_info = json.loads(fp.read())
+            
+        all_rgbpaths = []
+        all_bboxes = []
+        all_clsids = []
+        
+        for idx in scene_gt.keys():
+            paths = [scenepath / 'rgb' / f'{int(idx):06d}.{ext}' for ext in ['png', 'jpg']]
+            paths = [p for p in paths if p.exists()]
+            assert len(paths)==1
+            rgbpath = paths[0]
+
+            clsids = [int(e['obj_id']) for e in scene_gt[idx]]
+            bboxes = [e['bbox_obj'] for e in scene_gt_info[idx]]
+            
+            cids = [int(e['obj_id']) for e in scene_gt[idx]]
+            bboxes = [e['bbox_visib'] for e in scene_gt_info[idx]]
+
+            # visib_fract takes the inter-object coverage into account
+            # thus we can avoid bboxes of covered objects
+            # AND by taking the bbox_visib ones we have all bbox edges 
+            # INSIDE of the image and hence no further preprocessing needed
+            # before feeding into albumentation's transformations 
+            visib_fracts = [e['visib_fract'] for e in scene_gt_info[idx]]
+
+            filtered_bboxes, filtered_cids = [], []
+
+            # filter bboxes by visibility:
+            for bbox, cid, vis in zip(bboxes, cids, visib_fracts):
+                if vis > vis_threshold:
+                    filtered_bboxes.append(bbox)
+                    filtered_cids.append(cid)
+
+            if len(filtered_bboxes) > 0:  # only add non empty images                
+                all_rgbpaths.append(rgbpath)
+                # list of n_objs x 4
+                all_bboxes.append(np.array(filtered_bboxes))
+                # list of n_objs,
+                all_clsids.append(np.array(filtered_cids))
+            
+        return all_rgbpaths, all_bboxes, all_clsids
+    
+    def _parse_old_format(self, scenepath, vis_threshold):
+        del vis_threshold
+        import yaml
+        
+        with open(scenepath / 'gt.yml', 'r') as fp:            
+            scene_gt = yaml.load(fp.read(), Loader=yaml.Loader)
+            
+        all_rgbpaths = []
+        all_bboxes = []
+        all_clsids = []
+        
+        for idx in scene_gt.keys():
+            rgbpath = scenepath / 'rgb' / f'{int(idx):04d}.png'
+            #assert rgbpath.exists()
+            
+            clsids = [int(e['obj_id']) for e in scene_gt[idx]]
+            bboxes = [e['obj_bb'] for e in scene_gt[idx]]
+                       
+            all_rgbpaths.append(rgbpath)
+            all_bboxes.append(np.array(bboxes))
+            all_clsids.append(np.array(clsids))
+            
+        return all_rgbpaths, all_bboxes, all_clsids            
+
 
 
 def iterate(dl):
