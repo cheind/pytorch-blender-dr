@@ -258,9 +258,9 @@ class TLessTrainDataset(data.Dataset):
             assert is_bop_format or is_old_format, 'Cannot determine format.'
             
             if is_bop_format:
-                rgbpaths, bboxes, clsids = self._parse_bop_scene(scenepath, 0.3)
+                rgbpaths, bboxes, clsids = self._parse_bop_scene(scenepath, opt.vis_thres)
             else:
-                rgbpaths, bboxes, clsids = self._parse_old_format(scenepath, 0.3)
+                rgbpaths, bboxes, clsids = self._parse_old_format(scenepath, opt.vis_thres)
                 
             self.all_rgbpaths.extend(rgbpaths)
             self.all_bboxes.extend(bboxes)
