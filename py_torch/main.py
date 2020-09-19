@@ -264,7 +264,7 @@ class TLessTrainDataset(data.Dataset):
                 
             self.all_rgbpaths.extend(rgbpaths)
             self.all_bboxes.extend(bboxes)
-            self.all_clsids.extend(clsids)
+            self.all_cids.extend(clsids)
         
         # create image ids for evaluation, each image path has 
         # a unique id
