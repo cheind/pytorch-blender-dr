@@ -190,11 +190,11 @@ def main(opt):
     item_transform = transformation.item_transform
 
     # Setup Dataset
-    if opt.replay:
-        ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
-        # BUG: KeyError: 'image_id' klarerweise
-    else:
-        ds = TLessTestDataset(opt.inference_path, item_transform)
+    # if opt.replay:
+    #     ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
+    #     # BUG: KeyError: 'image_id' klarerweise
+    # else:
+    ds = TLessTestDataset(opt.inference_path, item_transform)
     
     logging.info(f"Data set size: {len(ds)}")
 
