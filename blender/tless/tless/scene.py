@@ -158,6 +158,12 @@ def create_scene(cfg=DEFAULT_CONFIG):
         angular_damp=cfg['physics.angular_damp'])
         
     randomize_box_material(cfg)
+    
+    # Use real background images on plane (and make box transparent)
+    bgImgFolder = cfg['scene.background_images']
+    if (len(bgImgFolder) > 0):
+        setupTexturePlane(bgImgFolder)
+        bpy.data.objects['Plane'].parent = bpy.data.objects['Camera']
         
     return objs, occs
 
@@ -224,7 +230,8 @@ def setTexture(objName, textureFileName):
         mat = bpy.data.materials.new(name="TextureMaterial_" + objName)
         obj.data.materials.append(mat)
     else: 
-        print("texture material already exists!")
+        #print("texture material already exists!")
+        pass
 
     # link the texture node directly to the material output node (without shading)
     mat.use_nodes = True
@@ -232,7 +239,8 @@ def setTexture(objName, textureFileName):
     #while(len(mat.node_tree.nodes) > 0):
     #    mat.node_tree.nodes.pop()
         
-    for img in bpy.data.images: bpy.data.images.remove(img)
+    for img in bpy.data.images: 
+        bpy.data.images.remove(img)
     
     matOut = mat.node_tree.nodes['Material Output']
     texImage = mat.node_tree.nodes.new('ShaderNodeTexImage')

@@ -35,10 +35,6 @@ def main():
     def pre_anim():
         nonlocal objs, occs
         objs, occs = scene.create_scene(cfg)
-        # Use real background images on plane (and make box transparent)
-        bgImagesFolder = 'd:/data/val2017/'
-        scene.setupTexturePlane(bgImagesFolder)
-        bpy.data.objects['Plane'].parent = bpy.data.objects['Camera']
         
     def post_frame(off, pub, anim, cam):
         if anim.frameid == 2: 

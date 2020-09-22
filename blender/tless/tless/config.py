@@ -14,6 +14,7 @@ import numpy as np
 #     'scene.object_location_bbox': [[-2, -2, 1],[2,2,4]],
 #     'scene.object_rotation_range': (-np.pi, np.pi),
 #     'scene.background_material': 'magic', # 'magic' or 'plain'.
+#     'scene.background_images': 'd:/data/val2017/', # folder name or ''
 #     'physics.linear_damp': 0.5,
 #     'physics.angular_damp': 0.5,
 #     'physics.friction': 0.8,

@@ -37,6 +37,7 @@
         3.141592653589793
     ],
     "scene.background_material": "magic",
+    "scene.background_images": "d:/data/val2017/",
     "physics.linear_damp": 0.5,
     "physics.angular_damp": 0.5,
     "physics.friction": 0.8
