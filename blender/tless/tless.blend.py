@@ -31,20 +31,22 @@ def main():
     else:
         cfg = DEFAULT_CONFIG        
 
-    step = 0
     objs, occs = None, None
-    
     def pre_anim():
-        nonlocal objs, occs        
-        objs, occs = scene.create_scene(pre_gen_data, cfg)
+        nonlocal objs, occs
+        objs, occs = scene.create_scene(cfg)
+        # Use real background images on plane (and make box transparent)
+        bgImagesFolder = 'd:/data/val2017/'
+        scene.setupTexturePlane(bgImagesFolder)
+        bpy.data.objects['Plane'].parent = bpy.data.objects['Camera']
         
-    def post_frame(off, pub, anim, cam, pre_gen_data):
+    def post_frame(off, pub, anim, cam):
         if anim.frameid == 2: 
             # Instead of generating just one image per simulation,
             # we generate N images from the same scene using 
             # random camera poses.       
             for _ in range(cfg['camera.num_images']):
-                bboxes = annotation.bboxes(cam, objs, pre_gen_data.simplified_xyz)
+                bboxes = annotation.bboxes(cam, objs, simplified_geoms)
                 visfracs = annotation.compute_visfracs(cam, objs, bboxes)
                 pub.publish(
                     image=off.render(), 
@@ -57,19 +59,15 @@ def main():
                     theta_range=cfg['camera.theta_range']
                 )
                 cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
+                pass
 
     def post_anim(anim):
-        nonlocal objs, occs, step
+        nonlocal objs, occs
         scene.remove_objects(objs, occs)
         objs, occs = None, None
 
-    # pre-generated reusable data
-    pre_gen_data = scene.PreGeneratedData(
-        max_occluders=cfg['scene.num_objects'],
-        max_materials=cfg['scene.num_objects'],
-        num_faces_simplified=300,
-        occ_shape=(50,50)
-    )
+    # bbox 
+    simplified_geoms = scene.simplified_templates(num_target_faces=300)
         
     # Make sure every Blender has its own random seed
     np.random.seed(btargs.btseed)
@@ -84,11 +82,11 @@ def main():
     cam = btb.Camera()
     off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
     off.set_render_style(shading='RENDERED', overlays=False)
-
+    
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
     anim.pre_animation.add(pre_anim)
-    anim.post_frame.add(post_frame, off, pub, anim, cam, pre_gen_data)
+    anim.post_frame.add(post_frame, off, pub, anim, cam)
     anim.post_animation.add(post_anim, anim)
     # Cant use animation system here
     anim.play(frame_range=(1,3), num_episodes=-1, use_animation=False)
