@@ -1,0 +1,44 @@
+{
+    "camera.num_images": 4,
+    "camera.radius_range": [
+        6,
+        12
+    ],
+    "camera.theta_range": [
+        0,
+        1.57
+    ],
+    "camera.lookat": [
+        0.0,
+        0.0,
+        0.0
+    ],
+    "scene.num_objects": 12,
+    "scene.prob_occluder": 0.6,
+    "scene.object_cls_prob": null,
+    "scene.object_intensity_range": [
+        0.1,
+        1
+    ],
+    "scene.object_location_bbox": [
+        [
+            -2,
+            -2,
+            1
+        ],
+        [
+            2,
+            2,
+            4
+        ]
+    ],
+    "scene.object_rotation_range": [
+        -3.141592653589793,
+        3.141592653589793
+    ],
+    "scene.background_material": "magic",
+    "scene.background_images": "d:/data/val2017/",
+    "physics.linear_damp": 0.6,
+    "physics.angular_damp": 0.5,
+    "physics.friction": 0.8
+}

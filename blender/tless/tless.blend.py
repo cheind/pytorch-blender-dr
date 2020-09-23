@@ -35,6 +35,8 @@ def main():
     def pre_anim():
         nonlocal objs, occs
         objs, occs = scene.create_scene(cfg)
+        ###scene.makeObjectTransparent('Box')
+        ###scene.setCameraBackgroundImage(cfg['scene.background_images'])
         
     def post_frame(off, pub, anim, cam):
         if anim.frameid == 2: 
@@ -42,6 +44,7 @@ def main():
             # we generate N images from the same scene using 
             # random camera poses.       
             for _ in range(cfg['camera.num_images']):
+                ###scene.setCameraBackgroundImage(cfg['scene.background_images'])
                 bboxes = annotation.bboxes(cam, objs, simplified_geoms)
                 visfracs = annotation.compute_visfracs(cam, objs, bboxes)
                 pub.publish(
