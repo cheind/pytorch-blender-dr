@@ -83,7 +83,7 @@ def main():
     # Setup default image rendering
     cam = btb.Camera()
     #off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.4)
+    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.2)
     #off.set_render_style(shading='RENDERED', overlays=False)
 
     # Setup the animation and run endlessly
