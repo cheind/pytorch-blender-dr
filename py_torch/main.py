@@ -11,6 +11,7 @@ from pathlib import Path
 import json
 
 import torch
+import torch.nn as nn
 from torch import optim
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
@@ -494,6 +495,9 @@ def main(opt):
         else:  # train from scratch
             model = get_model(heads)
             model.to(device=device)
+            if torch.cuda.device_count() > 1:
+                print("Let's use", torch.cuda.device_count(), "GPUs!")
+                model = nn.DataParallel(model)                
             optimizer = optim.Adam(model.parameters(), 
                 lr=opt.lr, weight_decay=opt.weight_decay)
             best_loss = 10 ** 8
