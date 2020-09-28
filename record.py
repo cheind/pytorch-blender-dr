@@ -21,7 +21,7 @@ def update_elapsed(elapsed):
     fig.savefig(f'./tmp/elapsed.png')
     plt.close(fig)
 
-def iterate(dl, min_visfrac=0.2):
+def iterate(dl, outpath, min_visfrac=0.2):
     DPI=96
     tlast = time.time()
     times = []
@@ -42,7 +42,7 @@ def iterate(dl, min_visfrac=0.2):
                 axs[i].set_axis_off()
                 axs[i].set_xlim(0,W-1)
                 axs[i].set_ylim(H-1,0)
-            fig.savefig(f'./tmp/output_{step}.png')
+            fig.savefig(f'./{outpath}/output_{step}.png')
             plt.close(fig)  
 
 def main():
@@ -51,6 +51,7 @@ def main():
     parser.add_argument('--num-items', default=512, type=int)
     parser.add_argument('--num-instances', default=4, type=int)
     parser.add_argument('--json-config', help='JSON configuration file')
+    parser.add_argument('--outpath', help='Output directory', default='tmp/')
     parser.add_argument('scene', help='Scene to generate [tless|kitchen]')
     args = parser.parse_args()
 
@@ -67,16 +68,17 @@ def main():
         assert path.exists()
         launch_args['instance_args'] = [['--json-config', args.json_config]] * args.num_instances
 
+    Path(args.outpath).mkdir(exist_ok=True, parents=True)
 
     # Launch Blender
     with btt.BlenderLauncher(**launch_args) as bl:
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
         ds = btt.RemoteIterableDataset(
-            addr, max_items=args.num_items, record_path_prefix=f'tmp/{args.scene}',timeoutms=30*1000)
+            addr, max_items=args.num_items, record_path_prefix=f'{args.outpath}/{args.scene}',timeoutms=30*1000)
         dl = data.DataLoader(ds, batch_size=4, num_workers=4)
         t = time.time()
-        iterate(dl)
+        iterate(dl, args.outpath)
         print(f'Finished in {time.time()-t} seconds.')
 
     if args.json_config:
