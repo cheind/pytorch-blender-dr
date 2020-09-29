@@ -8,11 +8,24 @@ from .config import DEFAULT_CONFIG
 SCN = bpy.context.scene
 LAYER = bpy.context.view_layer
 
-def randomize_bsdf_material(mat, basecolor=None):
+def randomize_bsdf_material(mat, basecolor=None, update_basecolor=True):
     bsdf = mat.node_tree.nodes.get("Principled BSDF") 
     if basecolor is None:
-        basecolor = np.random.uniform(0,1,size=3)
-    bsdf.inputs["Base Color"].default_value = np.concatenate((basecolor, [1.]))
+        basecolor = np.random.uniform(0,1,size=3)        
+    if update_basecolor:
+        bsdf.inputs["Base Color"].default_value = np.concatenate((basecolor, [1.]))
+
+    params = np.random.uniform(
+        #metallic, specular, roughness
+        low =[0.0,0.0,0.1],
+        high=[0.4,0.4,1.0],
+        size=(1,3)
+    )
+
+    bsdf.inputs['Metallic'].default_value = params[0,0]
+    bsdf.inputs['Specular'].default_value = params[0,1]
+    bsdf.inputs['Roughness'].default_value = params[0,2]    
+
     return mat
 
 def randomize_box_material(cfg):
@@ -24,6 +37,7 @@ def randomize_box_material(cfg):
         mapping = nodes.get('Mapping')
         mapping.inputs['Rotation'].default_value = np.random.uniform(-1.0, 1.0, size=3)
         mapping.inputs['Scale'].default_value = np.random.uniform(0.1, 3.0, size=3)
+        randomize_bsdf_material(mat, update_basecolor=False)
     elif cfg['scene.background_material'] == 'plain':
         mat = create_bsdf_material()
         randomize_bsdf_material(mat)

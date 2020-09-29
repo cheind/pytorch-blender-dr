@@ -11,6 +11,7 @@ from pathlib import Path
 import json
 
 import torch
+import torch.nn as nn
 from torch import optim
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
@@ -496,6 +497,9 @@ def main(opt):
         else:  # train from scratch
             model = get_model(heads)
             model.to(device=device)
+            if torch.cuda.device_count() > 1:
+                print("Let's use", torch.cuda.device_count(), "GPUs!")
+                model = nn.DataParallel(model)                
             optimizer = optim.Adam(model.parameters(), 
                 lr=opt.lr, weight_decay=opt.weight_decay)
             best_loss = 10 ** 8
@@ -519,10 +523,11 @@ def main(opt):
                 total_loss = meter.get_avg("total_loss")
                 logging.info(f"Loss: {total_loss} at epoch: {epoch} / {start_epoch + opt.num_epochs}")
 
+                state_dict = model.state_dict() if not isinstance(model, nn.DataParallel) else model.module.state_dict()
                 torch.save({
                     'loss': best_loss,
                     'epoch': epoch,
-                    'model_state_dict': model.state_dict(),
+                    'model_state_dict': state_dict,
                     'optimizer_state_dict': optimizer.state_dict(),
                 }, "./models/model_last.pth")
 
@@ -530,7 +535,7 @@ def main(opt):
                     torch.save({
                         'loss': best_loss,
                         'epoch': epoch,
-                        'model_state_dict': model.state_dict(),
+                        'model_state_dict': state_dict,
                         'optimizer_state_dict': optimizer.state_dict(),
                     }, f"./models/model_{epoch}.pth")
 
@@ -542,7 +547,7 @@ def main(opt):
                         torch.save({
                             'loss': best_loss,
                             'epoch': epoch,
-                            'model_state_dict': model.state_dict(),
+                            'model_state_dict': state_dict,
                             'optimizer_state_dict': optimizer.state_dict(),
                         }, f"./models/best_model.pth")
         except KeyboardInterrupt:

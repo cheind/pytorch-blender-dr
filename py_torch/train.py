@@ -4,7 +4,7 @@ from torchvision.utils import make_grid
 from .utils import MetricMeter
 from .visu import render
 from .decode import decode, filter_dets
-
+from tqdm import tqdm
 
 def add_dt(writer, tag, n_iter, output, batch, opt):
     """ Add predicted image scene to tensorboard writer """
@@ -66,26 +66,30 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer, opt):
 
     tag = "Train"
 
-    for i, batch in enumerate(dataloader):
-        batch = {k: v.to(device=device) for k, v in batch.items()}
+    with tqdm(total=len(dataloader)) as pbar:
+        for i, batch in enumerate(dataloader):
+            batch = {k: v.to(device=device) for k, v in batch.items()}
 
-        output = model(batch["image"])
-        loss, loss_dict = loss_fn(output, batch)
+            output = model(batch["image"])
+            loss, loss_dict = loss_fn(output, batch)
 
-        meter.update(loss_dict)
-        meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
+            meter.update(loss_dict)
+            meter.to_writer(writer, tag, n_iter=(epoch - 1) * len(dataloader) + i)
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
 
-        if i % opt.train_vis_interval == 0:
-            batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
-            output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
-            
-            add_dt(writer, tag + "/DT", i, output, batch, opt)
-            add_gt(writer, tag + "/GT", i, output, batch, opt)
-            add_hms(writer, tag + "/HMS", i, output, batch)
+            if i % opt.train_vis_interval == 0:
+                batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
+                output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
+                
+                add_dt(writer, tag + "/DT", i, output, batch, opt)
+                add_gt(writer, tag + "/GT", i, output, batch, opt)
+                add_hms(writer, tag + "/HMS", i, output, batch)
+            pbar.set_postfix(loss=loss.item())
+            pbar.update()
+        pbar.close()
 
     return meter
 
