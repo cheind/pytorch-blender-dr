@@ -59,24 +59,26 @@ class Transformation:
         self.std = opt.std
 
         transformations = [
-            A.HueSaturationValue(hue_shift_limit=20, 
-                sat_shift_limit=30, val_shift_limit=20, p=0.5),
-            A.ChannelShuffle(p=0.5),
-            A.HorizontalFlip(p=0.2),
-        ] if opt.augment else []
-
-        transformations.extend([
             # Rescale an image so that minimum side is equal to max_size,
             # keeping the aspect ratio of the initial image.
             A.SmallestMaxSize(max_size=min(opt.h, opt.w)),
             A.RandomCrop(height=opt.h, width=opt.w) if opt.augment else A.CenterCrop(height=opt.h, width=opt.w),
-            A.Normalize(mean=opt.mean, std=opt.std),
-        ])
+        ]
+
+        if opt.augment:  # augment on smaller dimensions for performance
+            transformations.extend([
+                A.HueSaturationValue(hue_shift_limit=20, 
+                    sat_shift_limit=30, val_shift_limit=20, p=0.5),
+                A.ChannelShuffle(p=0.5),
+                A.HorizontalFlip(p=0.2),
+            ])
+
+        transformations.append(A.Normalize(mean=opt.mean, std=opt.std))
 
         bbox_params = A.BboxParams(
-            format="coco",
-            min_area=50,  # < 100 pixels => drop bbox
-            min_visibility=0.5,  # < 20% of orig. vis. => drop bbox
+            format="coco",  # coco format: x_min, y_min, width, height
+            min_area=50,  # < x pixels => drop bbox
+            min_visibility=0.5,  # < original visibility => drop bbox
         )
 
         self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
