@@ -21,12 +21,12 @@ def update_elapsed(elapsed):
     fig.savefig(f'./tmp/elapsed.png')
     plt.close(fig)
 
-def iterate(dl, outpath, min_visfrac=0.2):
+def iterate(dl, outpath, min_visfrac=0.2, save_interval=100):
     DPI=96
     tlast = time.time()
     times = []
     for step, item in enumerate(dl):
-        if step % 100 == 0:                      
+        if step % save_interval == 0:                      
             elapsed = (time.time()-tlast)
             print(f'Received batch #{step:05d}, took {elapsed:.2f} secs since last.')
             times.append(elapsed)
@@ -52,6 +52,7 @@ def main():
     parser.add_argument('--num-instances', default=4, type=int)
     parser.add_argument('--json-config', help='JSON configuration file')
     parser.add_argument('--outpath', help='Output directory', default='tmp/')
+    parser.add_argument('--save-interval', type=int, default=100)
     parser.add_argument('scene', help='Scene to generate [tless|kitchen]')
     args = parser.parse_args()
 
@@ -78,7 +79,7 @@ def main():
             addr, max_items=args.num_items, record_path_prefix=f'{args.outpath}/{args.scene}',timeoutms=30*1000)
         dl = data.DataLoader(ds, batch_size=4, num_workers=4)
         t = time.time()
-        iterate(dl, args.outpath)
+        iterate(dl, args.outpath, min_visfrac=0.2, save_interval=args.save_interval)
         print(f'Finished in {time.time()-t} seconds.')
 
     if args.json_config:
