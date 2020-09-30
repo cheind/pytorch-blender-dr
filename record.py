@@ -62,6 +62,7 @@ def main():
         script=Path(__file__).parent/'blender'/args.scene/f'{args.scene}.blend.py',
         num_instances=args.num_instances,
         named_sockets=['DATA'],
+        blend_path="C:/Program Files/Blender Foundation/Blender 2.90",
     )
 
     if args.json_config:
@@ -87,4 +88,6 @@ def main():
         copyfile(args.json_config, f'tmp/{args.scene}.json')
 
 if __name__ == '__main__':
+    # example call:
+    # python record.py --num-items 16 tless --num-instances 4 --json-config record_config.json
     main()
