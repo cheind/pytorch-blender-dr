@@ -17,8 +17,8 @@ def randomize_bsdf_material(mat, basecolor=None, update_basecolor=True):
 
     params = np.random.uniform(
         #metallic, specular, roughness
-        low =[0.0,0.0,0.1],
-        high=[0.4,0.4,1.0],
+        low =[0.2,0.2,0.1],
+        high=[0.4,0.7,0.3],
         size=(1,3)
     )
 
