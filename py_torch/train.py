@@ -97,7 +97,7 @@ def train(epoch, model, optimizer, dataloader, device, loss_fn, writer, opt):
 @torch.no_grad()
 def eval(epoch, model, dataloader, device, loss_fn, writer, opt):
     model.to(device=device)
-    model.train()
+    model.eval()
 
     meter = MetricMeter()
 

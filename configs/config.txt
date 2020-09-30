@@ -3,14 +3,14 @@ scene: blender/tless
 
 # Replay from disc instead of launching from Blender
 replay: True
+replay_path: /mnt/data/20200924_tless_cameranoise_matupdate/tless
 
 # Launching Blender and stream data for learning
 stream: False
 
 # Record raw blender data from stream => stream: True required!
-
-record_path: /mnt/data/20200916_TLess_visibility/tless
 record: False
+record_path: /mnt/data/20200916_TLess_visibility/tless
 
 # Relevant for inference or resuming of training
 model_path: ./models/best_model.pth

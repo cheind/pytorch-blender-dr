@@ -71,7 +71,7 @@ def render(image, detections, opt, show=True,
 
     if save:
         fig.savefig(path)
-        logging.info(f"Saved at: {path}")
+        #logging.info(f"Saved at: {path}")
     if show:
         plt.show()
     if ret:

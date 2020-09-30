@@ -189,12 +189,75 @@ def main(opt):
     transformation = Transformation(opt)
     item_transform = transformation.item_transform
 
+
+    #####
+    # import matplotlib.pyplot as plt
+    # from .visu import COLORS
+
+    # # choose dataset:
+    # #ds = btt.FileDataset(opt.replay_path, item_transform=item_filter(item_transform, opt.vis_thres))
+    # #ds = TLessTestDataset(opt.inference_path, item_transform)
+    # ds = TLessTestDataset("/mnt/data/tless_train_pbr", item_transform)
+
+    # title = "/mnt/data/tless_train_pbr"
+
+    # dl = data.DataLoader(ds, batch_size=1, shuffle=False, num_workers=opt.worker_instances)
+    # id = 1
+    # cls_distr = np.zeros((opt.num_classes,), dtype=np.int64)
+    # folder = "./data"
+    # plot_thresh = 0.95
+
+    # for item in tqdm(dl, desc="Generating statistics"):
+    #     # class ids are remapped
+    #     cids = item["cids"].unsqueeze(-1)  # 1 x n x 1
+
+    #     unique, counts = np.unique(cids[0, :, 0].numpy(), return_counts=True)
+    #     cls_distr[unique] += counts
+        
+    #     if np.random.random() > plot_thresh:
+    #         image = item["image_gt"]  # 1 x h x w x 3, not normalized
+
+    #         # bounding boxes are filtered by visibility
+    #         bboxes = item["bboxes"]  # 1 x n x 4
+    #         scores = torch.ones_like(cids)  # 1 x n x 1
+    #         detections = torch.cat((bboxes, scores, cids), dim=-1)  # 1 x n x 6
+
+    #         p = f"{folder}/{id:05d}.png"
+    #         id += 1
+    #         render(image, detections, opt, show=False, save=True, path=p, denormalize=False, ret=False)
+
+    # # plot class distribution statistics
+    # fig, ax = plt.subplots()
+    # plt.title(title)
+
+    # rects = ax.bar(x=list(range(opt.num_classes)), 
+    #     height=cls_distr, color=COLORS[:opt.num_classes])
+
+    # total = cls_distr.sum()
+
+    # def autolabel(rects):
+    #     """Attach a text label above each bar in *rects*, displaying its height."""
+    #     for rect in rects:
+    #         height = rect.get_height()
+    #         ax.annotate(f'{height} / {int(height / total * 100)}%',
+    #                     xy=(rect.get_x() + rect.get_width() / 2, height),
+    #                     xytext=(0, 3),  # 3 points vertical offset
+    #                     textcoords="offset points",
+    #                     ha='center', va='bottom')
+    # uniform = total / opt.num_classes
+    # plt.plot([uniform for _ in range(opt.num_classes)],
+    #     linestyle="dashed")
+
+    # autolabel(rects)
+    # fig.tight_layout()
+    # fig.add_axes(ax)
+    # plt.savefig(f"{folder}/stats.png")
+
+    # return
+    #####
+
     # Setup Dataset
-    # if opt.replay:
-    #     ds = btt.FileDataset(opt.record_path, item_transform=item_filter(item_transform, opt.vis_thres))
-    #     # BUG: KeyError: 'image_id' klarerweise
-    # else:
-    ds = TLessTestDataset(opt.inference_path, item_transform)
+    ds = TLessTestDataset(opt.inference_path, item_transform)   
     
     logging.info(f"Data set size: {len(ds)}")
 
