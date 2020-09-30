@@ -17,7 +17,7 @@
     "scene.prob_occluder": 0.7,
     "scene.object_cls_prob": null,
     "scene.object_intensity_range": [
-        0.1,
+        0.6,
         1
     ],
     "scene.object_location_bbox": [

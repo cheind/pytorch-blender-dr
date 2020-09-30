@@ -33,10 +33,20 @@ def main():
 
     step = 0
     objs, occs = None, None
+
+    def randomize_cam(cam):
+        lfrom = btb.utils.random_spherical_loc(
+            radius_range=cfg['camera.radius_range'], 
+            theta_range=cfg['camera.theta_range']
+        )
+        cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
+
     
-    def pre_anim():
+    def pre_anim(cam):
         nonlocal objs, occs        
         objs, occs = scene.create_scene(pre_gen_data, cfg)
+        randomize_cam(cam)
+
         
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
@@ -52,11 +62,7 @@ def main():
                     visfracs=visfracs,
                     cids=annotation.classids(objs)
                 )
-                lfrom = btb.utils.random_spherical_loc(
-                    radius_range=cfg['camera.radius_range'], 
-                    theta_range=cfg['camera.theta_range']
-                )
-                cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
+                randomize_cam(cam)
 
     def post_anim(anim):
         nonlocal objs, occs, step
@@ -83,12 +89,12 @@ def main():
     # Setup default image rendering
     cam = btb.Camera()
     #off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.2)
+    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
     #off.set_render_style(shading='RENDERED', overlays=False)
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
-    anim.pre_animation.add(pre_anim)
+    anim.pre_animation.add(pre_anim, cam)
     anim.post_frame.add(post_frame, off, pub, anim, cam, pre_gen_data)
     anim.post_animation.add(post_anim, anim)
     # Cant use animation system here
