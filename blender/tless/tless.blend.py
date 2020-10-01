@@ -134,11 +134,11 @@ def main():
     #     print(col.objects[:])
 
     # without compositor
-    off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    off.set_render_style(shading='RENDERED', overlays=False)
+    # off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
+    # off.set_render_style(shading='RENDERED', overlays=False)
 
     # with compositor
-    #off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
+    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
