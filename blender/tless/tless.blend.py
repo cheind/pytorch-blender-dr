@@ -3,6 +3,8 @@ import numpy as np
 import argparse
 import json
 
+from itertools import product
+
 # Update python-path with current blend file directory,
 # so that package `tless` can be found.
 import sys
@@ -33,6 +35,7 @@ def main():
 
     step = 0
     objs, occs = None, None
+    position_gen = None
 
     def randomize_cam(cam):
         lfrom = btb.utils.random_spherical_loc(
@@ -41,19 +44,50 @@ def main():
         )
         cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
 
-    
-    def pre_anim(cam):
-        nonlocal objs, occs        
-        objs, occs = scene.create_scene(pre_gen_data, cfg)
-        randomize_cam(cam)
+    def rasterize_cam(cam):
+        # min, max of each coordinate
+        radius_range = cfg['camera.radius_range']
+        theta_range = cfg['camera.theta_range']
+        phi_range = (0, 2 * np.pi)
 
-        
+        # how many values should be sampled inside each coordinate's range
+        nradius = cfg["camera.nradius"]
+        ntheta = cfg["camera.ntheta"]
+        nphi = cfg["camera.nphi"]
+
+        # basically a nested for loop, including min, max boundaries
+        # evenly spaced
+        coords = product(np.linspace(*radius_range, num=nradius),
+                         np.linspace(*theta_range, num=ntheta),
+                         np.linspace(*phi_range, num=nphi))
+
+        for radius, theta, phi in coords:
+            lfrom = np.array([
+                np.sin(theta) * np.cos(phi),
+                np.sin(theta) * np.sin(phi),
+                np.cos(theta)
+            ]) * radius
+
+            cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
+            yield (radius, theta, phi)
+
+    def pre_anim(cam):
+        nonlocal objs, occs
+        nonlocal position_gen
+        objs, occs = scene.create_scene(pre_gen_data, cfg)
+        if cfg["camera.random"]:
+            randomize_cam(cam)
+        else:
+            position_gen = rasterize_cam(cam)
+            lfrom = next(position_gen)  # take a controlled camera step
+            print(lfrom)
+
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
             # Instead of generating just one image per simulation,
             # we generate N images from the same scene using 
             # random camera poses.       
-            for _ in range(cfg['camera.num_images']):
+            for j in range(1, cfg['camera.num_images'] + 1):
                 bboxes = annotation.bboxes(cam, objs, pre_gen_data.simplified_xyz)
                 visfracs = annotation.compute_visfracs(cam, objs, bboxes)
                 pub.publish(
@@ -62,7 +96,13 @@ def main():
                     visfracs=visfracs,
                     cids=annotation.classids(objs)
                 )
-                randomize_cam(cam)
+                if cfg["camera.random"]:
+                    randomize_cam(cam)
+                else:
+                    # take all specified positions if cfg['camera.num_images'] == nradius * ntheta * nphi
+                    if j < cfg['camera.num_images']:  # first camera position in pre_anim(cam) !
+                        lfrom = next(position_gen)  # take a controlled camera step
+                        print(lfrom)
 
     def post_anim(anim):
         nonlocal objs, occs, step
@@ -88,9 +128,17 @@ def main():
 
     # Setup default image rendering
     cam = btb.Camera()
-    #off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
-    #off.set_render_style(shading='RENDERED', overlays=False)
+
+    # for col in bpy.data.collections:
+    #     print(col.name)
+    #     print(col.objects[:])
+
+    # without compositor
+    off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
+    off.set_render_style(shading='RENDERED', overlays=False)
+
+    # with compositor
+    #off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()

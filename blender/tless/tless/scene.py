@@ -46,19 +46,21 @@ def randomize_box_material(cfg):
 
 def create_object(pre_gen_data, cfg=DEFAULT_CONFIG):
     # See https://blender.stackexchange.com/questions/135597/how-to-duplicate-an-object-in-2-8-via-the-python-api-without-using-bpy-ops-obje
-    tcoll = SCN.collection.children['Objects']      
+    tcoll = SCN.collection.children['Objects']  # get a collection of all objects from scene.blend
     gcoll = SCN.collection.children['Generated']
     
     templates = list(tcoll.objects)
-    if cfg['scene.object_cls_prob'] is None:
+    # set class distribution
+    if cfg['scene.object_cls_prob'] is None:  # uniform
         ids = np.arange(len(templates))
         p = np.ones(len(templates))
-    else:
-        d = cfg['scene.object_cls_prob']
+    else:  # custom distribution -> config.json
+        d = cfg['scene.object_cls_prob']  # dict e.g. 0:0.2, 1:0.3,...
         ids = list(map(int, d.keys()))
         p = np.array(list(d.values()))
+
     p /= p.sum()
-    c = np.random.choice(ids, p=p)
+    c = np.random.choice(ids, p=p)  # choose class according to given distribution
     
     new_obj = templates[c].copy()  # Note, we mesh data.
     new_obj.animation_data_clear()
@@ -80,14 +82,15 @@ def create_occluder(pre_gen_data, cfg=DEFAULT_CONFIG):
 
     occ = next(pre_gen_data.occ_gen)
     randomize_bsdf_material(occ.active_material)
-    
+
     params = np.random.uniform(
-        low =[0.00,1,1,1.0,0.0, 0.0],
-        high=[20.00,1,1,40,10.0,10.0],
-        size=(2,6)
+        low=[0.00, 1, 1, 1.0, 0.0, 0.0],
+        high=[20.00, 1, 1, 40, 10.0, 10.0],
+        size=(2, 6)
     )
 
-    scale = np.random.uniform(0.3, 1.5, size=3)    
+    # scale = np.random.uniform(0.3, 1.5, size=3)
+    scale = np.random.uniform(0.1, 0.7, size=3)
     x,y,z = sshape.supercoords(params, shape=pre_gen_data.occ_shape)    
     sshape.update_bpy_mesh(x*scale[0], y*scale[1], z*scale[2], occ)
     

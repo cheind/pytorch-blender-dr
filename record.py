@@ -77,7 +77,8 @@ def main():
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
         ds = btt.RemoteIterableDataset(
-            addr, max_items=args.num_items, record_path_prefix=f'{args.outpath}/{args.scene}',timeoutms=30*1000)
+            addr, max_items=args.num_items, #record_path_prefix=f'{args.outpath}/{args.scene}',
+            timeoutms=30*1000)
         dl = data.DataLoader(ds, batch_size=4, num_workers=4)
         t = time.time()
         iterate(dl, args.outpath, min_visfrac=0.2, save_interval=args.save_interval)
@@ -89,5 +90,6 @@ def main():
 
 if __name__ == '__main__':
     # example call:
-    # python record.py --num-items 16 tless --num-instances 4 --json-config record_config.json
+    # python record.py --num-items 64 tless --num-instances 4 --json-config record_config.json
+    # set --save-interval 1 to plot each sample!
     main()
