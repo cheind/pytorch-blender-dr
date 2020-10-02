@@ -80,7 +80,6 @@ def main():
         else:
             position_gen = rasterize_cam(cam)
             lfrom = next(position_gen)  # take a controlled camera step
-            print(lfrom)
 
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
@@ -102,7 +101,6 @@ def main():
                     # take all specified positions if cfg['camera.num_images'] == nradius * ntheta * nphi
                     if j < cfg['camera.num_images']:  # first camera position in pre_anim(cam) !
                         lfrom = next(position_gen)  # take a controlled camera step
-                        print(lfrom)
 
     def post_anim(anim):
         nonlocal objs, occs, step
