@@ -8,7 +8,11 @@ import os
 import sys
 import cv2
 from pathlib import Path
+
 import json
+import copy
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 import torch
 import torch.nn as nn
@@ -20,16 +24,19 @@ from torch.utils.tensorboard import SummaryWriter
 # pip install -e <DST>/pkg_pytorch
 from blendtorch import btt
 
-from .utils import Config
 from .train import train, eval
 from .loss import CenterLoss
 from .model import get_model
 from .decode import decode, filter_dets
 from .visu import render
+from .utils import Config, FileStream
+from .evaluation import create_gt_anns, evaluate
 
 from tqdm import tqdm
 from .utils import MetricMeter
 from .train import add_dt, add_gt, add_hms
+
+from .coco_report import COCOQuery
 
 
 # group classes
@@ -52,7 +59,7 @@ CLSES_MAP = {old_cls_id: new_cls_id for new_cls_id, group in enumerate(GROUPS)
                                         for old_cls_id in group}
 
 
-class Transformation:
+class Trans:
 
     def __init__(self, opt):
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
@@ -71,7 +78,7 @@ class Transformation:
         ]
 
         if opt.camera_noise:
-            transformations.append(A.GaussNoise(p=0.8))
+            transformations.append(A.GaussNoise(p=1.0, var_limit=(10, 60)))
 
         if opt.augment:  # augment on smaller dimensions for performance
             transformations.extend([
@@ -157,7 +164,6 @@ class Transformation:
 
     def item_transform(self, item):
         """
-        Transform data for training.
 
         :param item: dictionary
             - image: h x w x 3
@@ -172,7 +178,14 @@ class Transformation:
             - cpt_mask: n_max,
             - wh: n_max x 2, low resolution width, height - [0, 128], [0, 128]
             - cls_id: n_max,
+
+            added GT
+            "bboxes": bboxes,  # n x 4
+            "cids": cids,  # n,
         """
+
+        # here we get with the item filter the class remapped and visibility filtered 
+        # class ids and bboxes respectively
         image = item["image"]  # h x w x 3
         bboxes = item['bboxes']  # n x 4
         cids = item["cids"]  # n,
@@ -208,6 +221,11 @@ class Transformation:
         # the bbox labels help to reassign the correct classes
         cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
 
+        # we can access here the ground truth cids and bboxes which are
+        # pre filtered and valid after the augmentation transformation!
+        bboxes = bboxes[:-1].copy()  # n x 4
+        cids = cls_id[:len_valid].copy()  # n, 
+
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
         cpt = cpt / self.down_ratio
@@ -239,8 +257,11 @@ class Transformation:
             "cpt_mask": cpt_mask,
             "wh": wh,
             "cls_id": cls_id,
-        }
 
+            # ground truth to eval COCO on the fly
+            "bboxes": bboxes,  # n x 4
+            "cids": cids,  # n,
+        }
         return item
     
 
@@ -267,6 +288,11 @@ def item_filter(func, vis_thres):
     return inner
 
 
+def _to_float(x):
+    """ Reduce precision to save memory as adviced by the COCO team. """
+    return float(f"{x:.2f}")
+
+
 def main(opt):
     setattr(opt, "blend_path", "C:/Program Files/Blender Foundation/Blender 2.90")
 
@@ -278,45 +304,87 @@ def main(opt):
     setattr(opt, "weight_decay", 1 ** -3)
 
     setattr(opt, "num_samples", 2 * 10 ** 5)  # num. of samples to train for
-    setattr(opt, "train_vis_interval", 200)
-    setattr(opt, "val_vis_interval", 20)
-    setattr(opt, "save_interval", 10 ** 4)
-    setattr(opt, "val_interval", 10 ** 3)
+
+    # all intervals must be multiple of batch size in current implementation!
+    setattr(opt, "train_vis_interval", 256)
+    setattr(opt, "val_vis_interval", 32)
+    setattr(opt, "save_interval", 8192)
+    setattr(opt, "val_interval", 1024)
+    setattr(opt, "val_len", 256)  # thus 4 diff scenes, each 64 diff cam pos
 
     setattr(opt, "augment", True)
-    setattr(opt, "camera_noise", False)  # camera noise augmentation
+    setattr(opt, "camera_noise", True)  # camera noise augmentation
 
-    transformation = Transformation(opt)
-    item_transform = transformation.item_transform
+    setattr(opt, "eval_folder", "./runs/eval")
+
+    setattr(opt, "launch_info", "path to launch_info.json")
+
+    # if total loss in TRAINING is below that we perform an update step
+    setattr(opt, "loss_thres", 10.0)
+
+    setattr(opt, "n_max", 25)  # max. num. of real objects per image
+
+    setattr(opt, "obj_step", 2)  # increase num_objects by this step for difficulty increase
+
+    update_id = 0  # track update id received from blender instances
+    # the update id will change not immediatly after a update message
+    # is sent to the remote instances, thus track the "update_id" 
+    # to know when actually updated samples are incomming 
+
+    # we start with uniform class distribution of the 1 to 30 class objects
+    # in the T-Less data set and will later update the distribution to 
+    # populate the scene with more objects we classified weakly
+    cls_distr = {k:1 for k in range(30)}  # in blender intern 1 - 30 is mapped to 0 - 29
+
+    # start with a low number of objects first and increase the number in the validation 
+    # step, is constraint: num_objects <= opt.n_max 
+    num_objects = 4
+
+    # over each validation run with lenght opt.val_len we start with
+    # an image id of 0 and increase it, for each image we need a unique image
+    # id to match the ground truth with the prediction in the COCO evaluation tool 
+    image_id = 0
+
+    # for each bbox annotation in the ground truth (typically multiple per image)
+    # we need to have a unique annotation id (COCO format requieres this)
+    gt_ann_id = 0
+
+    # Note: both, image id and gt ann id, are reset after each validation run of opt.val_len
+    
+    print(opt)  # print options here since we adopt them from offline training
+
+    trans = Trans(opt)
 
     with ExitStack() as es:
-        # Launch Blender instance. Upon exit of this script all Blender 
-        # instances will be closed.
-        bl = es.enter_context(
-            btt.BlenderLauncher(
-                scene=f"{opt.scene}.blend",
-                script=f"{opt.scene}.blend.py",
-                num_instances=opt.blender_instances,
-                named_sockets=['DATA', 'CTRL'],
-                blend_path=opt.blend_path,
-            )
-        )
+        launch_info = btt.LaunchInfo.load_json(opt.launch_info)
+        data_addr = launch_info.addresses['DATA']
+        ctrl_addr = launch_info.addresses['CTRL']  # array of addresses
 
-        addr = bl.launch_info.addresses['DATA']
+        # Provides generic bidirectional communication with a single PyTorch instance
+        remotes = [btt.DuplexChannel(addr) for addr in ctrl_addr]
+
+        #####
+        # the other side needs:
+        #duplex = btb.DuplexChannel(btargs.btsockets['CTRL'], btargs.btid)
+        # and in the pre frame:
+        #msg = duplex.recv(timeoutms=0)  # msg is a dictionary
+
+        # and we send messages like:
+        # remote.send(shape_params=subset.cpu().numpy(), shape_ids=subset_ids.numpy())
+        # these kwargs get sent as dictionary!
+        #####
+
         # Setup a streaming dataset
         # Iterable datasets do not support shuffle
         ds = btt.RemoteIterableDataset(
-            addr,
+            data_addr,
             max_items=10**8,
-            item_transform=item_filter(item_transform, opt.vis_thres)
+            item_transform=item_filter(trans.item_transform, opt.vis_thres)
         )
 
         # Setup DataLoader
         dl = data.DataLoader(ds, batch_size=opt.batch_size, 
             num_workers=opt.worker_instances, shuffle=False)
-
-
-        # Setup 
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -334,18 +402,41 @@ def main(opt):
         best_loss = 10 ** 8
 
         writer = SummaryWriter()  # save into ./runs folder
-    
-        train_meter = MetricMeter()
+
+        num_tot_train_samples = 0
+
+        num_val_samples = 0
+        val_flag = False  # flag is True while validation samples are processed!
+
         val_meter = MetricMeter()
+        train_meter = MetricMeter()
+        
+        # dictionary to build COCO json files for AP evaluation
+        def empty_gt_dict():
+            gt = {"images": [], "annotations": [], 
+                  "categories": [
+                      {"id": cls_id, "name": str(cls_id)} for cls_id in range(len(GROUPS)) 
+                  ]}
+            return gt
+        
+        # reset ground truths and predictions
+        ground_truth = empty_gt_dict()
+        prediction = []
 
         # train for a given number of samples
         with tqdm(total=len(dl)) as pbar:
             for i, batch in enumerate(dl):  # iterate over batches
-                i *= opt.batch_size
+                i *= opt.batch_size  # num of samples train + val
 
                 batch = {k: v.to(device) for k, v in batch.items()}
 
-                if i % opt.val_interval == 0 and i != 0:
+                ### VALIDATION ###
+                if i % opt.val_interval == 0 and i != 0 or val_flag:
+                    val_flag = True  # keep flag True till opt.val_len reached!
+
+                    # update samples processed in current validation run
+                    num_val_samples += opt.batch_size  
+
                     model.eval()
 
                     output = model(batch["image"])
@@ -353,6 +444,18 @@ def main(opt):
 
                     val_meter.update(loss_dict)
                     val_meter.to_writer(writer, "Val", n_iter=i)
+
+                    # add predictions and ground truths to the corresponding dicts
+                    ground_truth
+
+                    dets = decode(out, opt.k)  # 1 x k x 6
+                    dets = filter_dets(dets, opt.model_thres)  # 1 x k' x 6
+
+                    prediction 
+                    
+                    # increase, must be unique
+                    image_id
+                    gt_ann_id 
 
                     if i % opt.val_vis_interval == 0  and i != 0:
                         batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
@@ -372,12 +475,93 @@ def main(opt):
                         
                         torch.save({
                             'loss': best_loss,
-                            'nsample': i,
+                            'nsample': num_tot_train_samples,
                             'model_state_dict': state_dict,
                             'optimizer_state_dict': optimizer.state_dict(),
                         }, f"./models/best_model.pth")
 
+                    ### RESET ###
+                    if num_val_samples >= opt.val_len:  
+                        # reset validation counters/status trackers
+                        val_flag = False
+                        num_val_samples = 0
+
+                        # we can reset the ids
+                        image_id = 0
+                        gt_ann_id = 0
+
+                        ### AP EVALUATION ###
+                        gtFile = f"{opt.eval_folder}/gt{num_tot_train_samples}.json"
+                        dtFile = f"{opt.eval_folder}/dt{num_tot_train_samples}.json"
+                        # we save the ground_truths and predictions after each validation run
+                        json.dump(ground_truth, open(gtFile))
+                        json.dump(prediction, open(dtFile))
+
+                        # reset ground truths and predictions
+                        ground_truth = empty_gt_dict()
+                        prediction = []
+
+                        # when under a certain training loss treshold we adapt the class distribution
+                        # to favor the weakly classified samples
+                        if train_meter.get_avg("total_loss") < opt.loss_thres:
+
+                            if toggle_flag:  # increase num. of objects per image to increase difficulty
+                                for remote in remotes:
+                                    num_objects += opt.obj_step
+                                    if num_objects > opt.n_max:
+                                        num_objects = opt.n_max
+                                    # change num. of objects
+                                    remote.send(num_objects=num_objects)
+
+                            else:  # change class distribution to increase difficulty
+                                cocoGt = COCO(gtFile)
+                                cocoDt = cocoGt.loadRes(dtFile)
+
+                                # get class based AP metrics
+                                cq = COCOQuery(cocoGt, cocoDt)
+                                precs = np.zeros((len(GROUPS), ))
+
+                                for cls_id in range(len(GROUPS)):  # cls_id: 0 - 5 
+                                    # precision over all IoUs 0.5 - 0.95 for a single class
+                                    precs[cls_id] = cq.ap(klass=cls_id)  # scalar AP value  
+
+                                weakest_cls = np.argmin(precs, axis=0)  # our labels 0 - 5
+                                # GROUPS maps tless labels to our class groups e.g. 0: [1, 2, 3, 4],...
+                                weakest_tless_clses = GROUPS[weakest_cls]  # tless labels 1 - 30
+
+                                # blender intern 0 - 29
+                                weakest_tless_clses = [cls_id - 1 for cls_id in weakest_tless_clses]
+
+                                # add +1 over all members of the weakest class 
+                                n_weak_members = len(weakest_tless_clses)
+                                # thus add 1.0 / all weakest class members
+                                value = 1.0 / n_weak_members 
+
+                                # update the class distribution
+                                for cls_id in weakest_tless_clses:
+                                    cls_distr[cls_id] += value
+
+                                # change class distribution s.t. the low AP classes are more likely
+                                for remote in remotes:
+                                    # changed class distribution, cls ids blender intern 0 - 29
+                                    remote.send(object_cls_prob=cls_distr)
+                            
+                            # alternate between changing num. of objects and class distribution
+                            if num_objects == opt.n_max:
+                                # always change class distribution if max objs reached
+                                toggle_flag = False  
+                            else:  
+                                toggle_flag = not toggle_flag 
+
+                        # reset meters too
+                        val_meter = MetricMeter()  # then avg is tracked over opt.val_len samples
+
+                        # also build a new trainings progress tracker for the avg training loss
+                        train_meter = MetricMeter()
+
+                ### TRAINING ###
                 else:
+                    num_tot_train_samples += opt.batch_size  # update samples used for training
                     model.train()
 
                     output = model(batch["image"])
@@ -406,7 +590,7 @@ def main(opt):
 
                         torch.save({
                             'loss': best_loss,
-                            'nsample': i,
+                            'nsample': num_tot_train_samples,
                             'model_state_dict': state_dict,
                             'optimizer_state_dict': optimizer.state_dict(),
                         }, f"./models/model_{i}.pth")    
@@ -414,7 +598,9 @@ def main(opt):
                 pbar.set_postfix(loss=loss.item())
                 pbar.update()
 
-                if i >= opt.num_samples:
+                ### EXIT ###
+                if num_tot_train_samples >= opt.num_samples:
+                    # if we exceed/meet the amount of training samples quit training!
                     break
 
             pbar.close()    
@@ -426,6 +612,5 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO)
 
     opt = Config("./configs/config.txt")
-    print(opt)
     
     main(opt)
