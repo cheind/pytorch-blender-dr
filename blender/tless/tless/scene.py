@@ -57,7 +57,7 @@ def create_object(pre_gen_data, cfg=DEFAULT_CONFIG):
     else:  # custom distribution -> config.json
         d = cfg['scene.object_cls_prob']  # dict e.g. 0:0.2, 1:0.3,...
         ids = list(map(int, d.keys()))
-        p = np.array(list(d.values()))
+        p = np.array(list(d.values())).astype(np.float32)
 
     p /= p.sum()
     c = np.random.choice(ids, p=p)  # choose class according to given distribution
