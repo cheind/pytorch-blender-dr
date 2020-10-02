@@ -77,7 +77,7 @@ def main():
         # Create remote dataset and limit max length to 16 elements.
         addr = bl.launch_info.addresses['DATA']
         ds = btt.RemoteIterableDataset(
-            addr, max_items=args.num_items, #record_path_prefix=f'{args.outpath}/{args.scene}',
+            addr, max_items=args.num_items, record_path_prefix=f'{args.outpath}/{args.scene}',
             timeoutms=30*1000)
         dl = data.DataLoader(ds, batch_size=4, num_workers=4)
         t = time.time()
