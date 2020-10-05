@@ -58,30 +58,21 @@ def _topk(heat: torch.Tensor, k):
     return topk_scores, topk_inds, topk_cids, topk_ys, topk_xs
 
 
-def _gather_feat(feat, ind, mask=None):
+def _gather_feat(feat, ind):
     """
 
     Parameters
     ----------
     feat: b x h * w x c
     ind: b x k
-    mask: b x k
 
     Returns
     -------
-    without mask: a x d x c
-    with mask: ??
-
+    a x d x c
     """
     dim = feat.size(2)  # c
     ind = ind.unsqueeze(2).expand(ind.size(0), ind.size(1), dim)  # b x k x c
     feat = feat.gather(1, ind)  # b x k x c
-    if mask is not None:  # TODO
-        mask = mask.unsqueeze(2).expand_as(feat)  # b x k x c
-        # if mask is bool -> flat with length of mask.sum()
-        feat = feat[mask]  # ??
-        feat = feat.view(-1, dim)  # ??
-        raise NotImplementedError
 
     return feat
 
@@ -136,31 +127,11 @@ def decode(out, k):
     cpt_off = out["cpt_off"]
     wh = out["wh"]
 
-    """ import matplotlib.pyplot as plt
-    plt.title("cpt_hm in decode")
-    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
-        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
-    plt.savefig("debug/debug01.png") """
-
     b = cpt_hm.size(0)
     cpt_hm = _nms(cpt_hm)  # b x c x h x w
 
-    """ import matplotlib.pyplot as plt
-    plt.title("cpt_hm in decode post nms")
-    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
-        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
-    plt.savefig("debug/debug02.png") """
-
     # each of shape: b x k
     topk_scores, topk_inds, topk_cids, topk_ys, topk_xs = _topk(cpt_hm, k)
-
-    """ import matplotlib.pyplot as plt
-    plt.title("cpt_hm in decode post nms with topk")
-    plt.imshow(cpt_hm.detach().clone().cpu().squeeze(0).permute(1, 2, 0).numpy(),
-        cmap="Greys", vmin=0, vmax=1.0, origin='upper')
-    plt.scatter(topk_xs.detach().clone().cpu(), 
-        topk_ys.detach().clone().cpu(), marker="x")
-    plt.savefig("debug/debug03.png") """
 
     topk_cpt_off = _transpose_and_gather_feat(cpt_off, topk_inds)  # b x k x 2
 

@@ -324,7 +324,11 @@ def main(opt):
 
     setattr(opt, "n_max", 25)  # max. num. of real objects per image
 
+    setattr(opt, "k", 30)  # num. of extracted heat map peaks (>= n_max or generated objects per image)
+
     setattr(opt, "obj_step", 2)  # increase num_objects by this step for difficulty increase
+
+    setattr(opt, "model_thres", 0.1)  # threshold for detection filtering
 
     update_id = 0  # track update id received from blender instances
     # the update id will change not immediatly after a update message
@@ -363,16 +367,19 @@ def main(opt):
         # Provides generic bidirectional communication with a single PyTorch instance
         remotes = [btt.DuplexChannel(addr) for addr in ctrl_addr]
 
-        #####
-        # the other side needs:
-        #duplex = btb.DuplexChannel(btargs.btsockets['CTRL'], btargs.btid)
-        # and in the pre frame:
-        #msg = duplex.recv(timeoutms=0)  # msg is a dictionary
+        """
+        Other side (remote, blender):
+        duplex = btb.DuplexChannel(btargs.btsockets['CTRL'], btargs.btid)
+        
+        We can receive a message (= a dictionary) like:
+        msg = duplex.recv(timeoutms=0)
+        ...and thus alter some generation parameters in the pre frame method!
 
-        # and we send messages like:
-        # remote.send(shape_params=subset.cpu().numpy(), shape_ids=subset_ids.numpy())
-        # these kwargs get sent as dictionary!
-        #####
+        And on this side (pytorch) we send a message like:
+        remote.send(shape_params=subset.cpu().numpy(), shape_ids=subset_ids.numpy())
+        
+        Note: key word arguments get sent as dictionary by .send()
+        """
 
         # Setup a streaming dataset
         # Iterable datasets do not support shuffle
@@ -439,23 +446,71 @@ def main(opt):
 
                     model.eval()
 
+                    # model output dictionary, entry for each head's output
                     output = model(batch["image"])
                     _, loss_dict = loss_fn(output, batch)
 
                     val_meter.update(loss_dict)
                     val_meter.to_writer(writer, "Val", n_iter=i)
 
-                    # add predictions and ground truths to the corresponding dicts
-                    ground_truth
+                    ### PREDICTION ###
+                    dets = decode(output, opt.k)  # b x k x 6; b x k x [bbox (4), score(1), cid(1)]
+                    dets = filter_dets(dets, opt.model_thres)  # b x k' x 6
 
-                    dets = decode(out, opt.k)  # 1 x k x 6
-                    dets = filter_dets(dets, opt.model_thres)  # 1 x k' x 6
+                    dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
 
-                    prediction 
+                    dets = dets.cpu().numpy()  # b x k' x 6
+
+                    bboxes = dets[..., :4]  # b x k' x 4
+                    scores = dets[..., 4]  # b x k',
+                    cids = dets[..., 5]  # b x k',
                     
-                    # increase, must be unique
-                    image_id
-                    gt_ann_id 
+                    batch_len = bboxes.shape[0]  # = b
+                    k_filtered = bboxes.shape[1]  # = k'
+
+                    gt_bboxes = batch["bboxes"]  # ground truth bboxes, b x n x 4
+                    gt_cids = batch["cids"]  # ground truth class ids, b x n
+
+                    gt_bboxes = gt_bboxes.cpu().numpy()
+                    gt_cids = gt_cids.cpu().numpy()
+
+                    n_image_objs = gt_bboxes.shape[1]
+
+                    is_crowd = 0  # no crowd annotations, individual objects labeled
+
+                    # for each image in the batch store detections and ground truths
+                    for b in batch_len:  
+                        for k in k_filtered:
+                            prediction.append({
+                                "image_id": image_id,
+                                "category_id": int(cids[b, k]),
+                                "bbox": list(map(_to_float, bboxes[b, k, :])),
+                                "score": _to_float(scores[b, k]),
+                            })
+
+                        for n in n_image_objs:
+                            # area is used to group the AP evaluation into small, medium, large objects
+                            # depending on the bbox area in pixels given fixed thresholds (see COCO)
+                            area = gt_bboxes[b, n, 2] * gt_bboxes[b, n, 3]  # number of pixels
+
+                            ground_truth["annotations"].append({
+                                "image_id": int(image_id),
+                                "category_id": int(gt_cids[b, n]),
+                                "bbox": gt_bboxes[b, n].tolist(),
+                                "id": int(gt_ann_id),  # each annotation has to have a unique id
+                                "iscrowd": int(is_crowd),
+                                "area": int(area),
+                            })
+
+                            # increase, must be unique
+                            gt_ann_id += 1
+
+                        ground_truth["images"].append({
+                            "id": int(image_id),
+                        })
+
+                        # increase, must be unique
+                        image_id += 1
 
                     if i % opt.val_vis_interval == 0  and i != 0:
                         batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
