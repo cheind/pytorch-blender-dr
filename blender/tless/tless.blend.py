@@ -81,19 +81,6 @@ def main():
             position_gen = rasterize_cam(cam)
             lfrom = next(position_gen)  # take a controlled camera step
 
-    def pre_frame(duplex):
-        nonlocal update_id, cfg
-        msg = duplex.recv(timeoutms=0)
-
-        if msg != None:
-            # cfg['scene.num_objects'] = msg["num_objects"]
-            # cfg['scene.object_cls_prob'] = msg["object_cls_prob"]
-
-            # the solution above won't work since msg can or cannot
-            # contain one of the above keys, use:
-            cfg = {**cfg, **msg}
-            update_id += 1
-
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
             # Instead of generating just one image per simulation,
