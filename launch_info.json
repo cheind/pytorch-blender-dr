@@ -1,0 +1,13 @@
+{
+    "addresses": {
+        "DATA": [
+            "tcp://192.168.20.105:11000"
+        ],
+        "CTRL": [
+            "tcp://192.168.20.105:11001"
+        ]
+    },
+    "commands": [
+        "C:\\Program Files\\Blender Foundation\\Blender 2.90\\blender.exe ./blender/tless/tless.blend --python-use-system-env --enable-autoexec --python ./blender/tless/tless.blend.py -- -btid 0 -btseed 10 -btsockets DATA=tcp://192.168.20.105:11000 CTRL=tcp://192.168.20.105:11001"
+    ]
+}

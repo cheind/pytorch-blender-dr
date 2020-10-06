@@ -36,7 +36,7 @@ from tqdm import tqdm
 from .utils import MetricMeter
 from .train import add_dt, add_gt, add_hms
 
-from .coco_report import COCOQuery
+from .coco_report import coco_eval, ap_values
 
 
 # group classes
@@ -180,8 +180,8 @@ class Trans:
             - cls_id: n_max,
 
             added GT
-            "bboxes": bboxes,  # n x 4
-            "cids": cids,  # n,
+            "bboxes": bboxes,  # n_max x 4
+            "cids": cids,  # n_max,
         """
 
         # here we get with the item filter the class remapped and visibility filtered 
@@ -189,6 +189,8 @@ class Trans:
         image = item["image"]  # h x w x 3
         bboxes = item['bboxes']  # n x 4
         cids = item["cids"]  # n,
+
+        update_id = item["update_id"]
 
         h, w = image.shape[:2]
 
@@ -223,8 +225,15 @@ class Trans:
 
         # we can access here the ground truth cids and bboxes which are
         # pre filtered and valid after the augmentation transformation!
-        bboxes = bboxes[:-1].copy()  # n x 4
-        cids = cls_id[:len_valid].copy()  # n, 
+        bboxes_ = bboxes[:, :-1].copy()  # n x 4
+        cids_ = cls_id[:len_valid].copy()  # n, 
+
+        bboxes = np.zeros((self.n_max, 4), dtype=np.float32)
+        cids = np.zeros((self.n_max,), dtype=np.int32)
+
+        # to be stacked by the default collate_fn
+        bboxes[:len_valid, :] = bboxes_
+        cids[:len_valid] = cids_
 
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
@@ -259,8 +268,11 @@ class Trans:
             "cls_id": cls_id,
 
             # ground truth to eval COCO on the fly
-            "bboxes": bboxes,  # n x 4
-            "cids": cids,  # n,
+            "bboxes": bboxes,  # n_max x 4
+            "cids": cids,  # n_max,
+
+            # current update state of the remote data generator
+            "update_id": update_id,
         }
         return item
     
@@ -294,10 +306,7 @@ def _to_float(x):
 
 
 def main(opt):
-    setattr(opt, "blend_path", "C:/Program Files/Blender Foundation/Blender 2.90")
 
-    setattr(opt, "scene", )  # e.g. xy.blend -> xy
-    setattr(opt, "blender_instances", 2)
     setattr(opt, "vis_thresh", 0.3)
     setattr(opt, "batch_size", 16)
     setattr(opt, "worker_instances", 4)
@@ -306,18 +315,29 @@ def main(opt):
     setattr(opt, "num_samples", 2 * 10 ** 5)  # num. of samples to train for
 
     # all intervals must be multiple of batch size in current implementation!
+    """
     setattr(opt, "train_vis_interval", 256)
     setattr(opt, "val_vis_interval", 32)
     setattr(opt, "save_interval", 8192)
     setattr(opt, "val_interval", 1024)
     setattr(opt, "val_len", 256)  # thus 4 diff scenes, each 64 diff cam pos
+    """
+
+    ### FOR DEBUGGING ####
+    setattr(opt, "num_samples", 20 * 16)  # num. of samples to train for
+    setattr(opt, "train_vis_interval", 2 * 16)
+    setattr(opt, "val_vis_interval", 1 * 16)
+    setattr(opt, "save_interval", 8192)
+    setattr(opt, "val_interval", 4 * 16)  
+    setattr(opt, "val_len", 2 * 16)  # thus 4 diff scenes, each 64 diff cam pos
+    ######################
 
     setattr(opt, "augment", True)
     setattr(opt, "camera_noise", True)  # camera noise augmentation
 
     setattr(opt, "eval_folder", "./runs/eval")
 
-    setattr(opt, "launch_info", "path to launch_info.json")
+    setattr(opt, "launch_info", "./launch_info.json")
 
     # if total loss in TRAINING is below that we perform an update step
     setattr(opt, "loss_thres", 10.0)
@@ -329,11 +349,6 @@ def main(opt):
     setattr(opt, "obj_step", 2)  # increase num_objects by this step for difficulty increase
 
     setattr(opt, "model_thres", 0.1)  # threshold for detection filtering
-
-    update_id = 0  # track update id received from blender instances
-    # the update id will change not immediatly after a update message
-    # is sent to the remote instances, thus track the "update_id" 
-    # to know when actually updated samples are incomming 
 
     # we start with uniform class distribution of the 1 to 30 class objects
     # in the T-Less data set and will later update the distribution to 
@@ -367,13 +382,18 @@ def main(opt):
         # Provides generic bidirectional communication with a single PyTorch instance
         remotes = [btt.DuplexChannel(addr) for addr in ctrl_addr]
 
+        # initialize num. of objects and class distribution of remote
+        for remote in remotes:
+            remote.send(num_objects=num_objects, object_cls_prob=cls_distr)
+
         """
         Other side (remote, blender):
         duplex = btb.DuplexChannel(btargs.btsockets['CTRL'], btargs.btid)
         
         We can receive a message (= a dictionary) like:
         msg = duplex.recv(timeoutms=0)
-        ...and thus alter some generation parameters in the pre frame method!
+        Note: msg is None if timeout
+        ...and thus we can alter some generation parameters in pre frame!
 
         And on this side (pytorch) we send a message like:
         remote.send(shape_params=subset.cpu().numpy(), shape_ids=subset_ids.numpy())
@@ -430,189 +450,218 @@ def main(opt):
         ground_truth = empty_gt_dict()
         prediction = []
 
+        num_validations = int(opt.num_samples / opt.val_interval)
+        val_samples = num_validations * opt.val_len
+        # num. of targeted training samples plus validation sample = total samples used
+        total_iterations = opt.num_samples + val_samples
+
+        toggle_flag = True  # toggle between 2 different update strategies
+
         # train for a given number of samples
-        with tqdm(total=len(dl)) as pbar:
+        with tqdm(total=total_iterations) as pbar:
             for i, batch in enumerate(dl):  # iterate over batches
                 i *= opt.batch_size  # num of samples train + val
 
                 batch = {k: v.to(device) for k, v in batch.items()}
 
+                # track update id
+                update_id = batch["update_id"]  # b,
+                update_id = update_id.float().mean().item()
+                writer.add_scalar("Update id", update_id, global_step=i)
+
+                logging.debug(f"update_id: {update_id}")
+                logging.debug(f"i: {i}")
+
                 ### VALIDATION ###
                 if i % opt.val_interval == 0 and i != 0 or val_flag:
-                    val_flag = True  # keep flag True till opt.val_len reached!
+                    logging.debug(f"VALIDATION -> val_flag: {val_flag}")
 
-                    # update samples processed in current validation run
-                    num_val_samples += opt.batch_size  
+                    with torch.no_grad():
+                        val_flag = True  # keep flag True till opt.val_len reached!
 
-                    model.eval()
+                        # update samples processed in current validation run
+                        num_val_samples += opt.batch_size  
 
-                    # model output dictionary, entry for each head's output
-                    output = model(batch["image"])
-                    _, loss_dict = loss_fn(output, batch)
+                        model.eval()
 
-                    val_meter.update(loss_dict)
-                    val_meter.to_writer(writer, "Val", n_iter=i)
+                        # model output dictionary, entry for each head's output
+                        output = model(batch["image"])
+                        _, loss_dict = loss_fn(output, batch)
 
-                    ### PREDICTION ###
-                    dets = decode(output, opt.k)  # b x k x 6; b x k x [bbox (4), score(1), cid(1)]
-                    dets = filter_dets(dets, opt.model_thres)  # b x k' x 6
+                        val_meter.update(loss_dict)
+                        val_meter.to_writer(writer, "Val", n_iter=i)
 
-                    dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
+                        ### PREDICTION ###
+                        gt_bboxes = batch["bboxes"].cpu().numpy()  # b x n_max x 4
+                        gt_cids = batch["cids"].cpu().numpy()  # b x n_max
+                        cpt_mask = batch["cpt_mask"].cpu().numpy()  # b x n_max
 
-                    dets = dets.cpu().numpy()  # b x k' x 6
+                        # b x k x 6; b x k x [bbox, score, cid]
+                        dets_tensor = decode(output, opt.k)  # unfiltered  
 
-                    bboxes = dets[..., :4]  # b x k' x 4
-                    scores = dets[..., 4]  # b x k',
-                    cids = dets[..., 5]  # b x k',
-                    
-                    batch_len = bboxes.shape[0]  # = b
-                    k_filtered = bboxes.shape[1]  # = k'
+                        is_crowd = 0  # no crowd annotations, individual objects labeled
 
-                    gt_bboxes = batch["bboxes"]  # ground truth bboxes, b x n x 4
-                    gt_cids = batch["cids"]  # ground truth class ids, b x n
+                        for b in range(opt.batch_size):
+                            # 1 x k' x 6 with possibly different k' each iteration
+                            dets = filter_dets(dets_tensor[b, ...], opt.model_thres) 
+                            dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512
+                            dets = dets.cpu().numpy()  # 1 x k' x 6
 
-                    gt_bboxes = gt_bboxes.cpu().numpy()
-                    gt_cids = gt_cids.cpu().numpy()
+                            # store detections
+                            k_filtered = dets.shape[1]  # = k'
+                            for k in range(k_filtered):
+                                prediction.append({
+                                    "image_id": image_id,
+                                    "category_id": int(dets[0, k, 5]),
+                                    "bbox": list(map(_to_float, dets[0, k, :4])),
+                                    "score": _to_float(dets[0, k, 4]),
+                                })
 
-                    n_image_objs = gt_bboxes.shape[1]
+                            # for each batch cpt_mask are all 1s and then all 0s
+                            for idx in range(cpt_mask[b].sum()):
+                                # area is used to group the AP evaluation into small, medium, large objects
+                                # depending on the bbox area in pixels given fixed thresholds (see COCO)
+                                area = gt_bboxes[b, idx, 2] * gt_bboxes[b, idx, 3]  # number of pixels
 
-                    is_crowd = 0  # no crowd annotations, individual objects labeled
+                                ground_truth["annotations"].append({
+                                    "image_id": int(image_id),
+                                    "category_id": int(gt_cids[b, idx]),
+                                    "bbox": list(map(_to_float, gt_bboxes[b, idx, :])),
+                                    "id": int(gt_ann_id),  # each annotation has to have a unique id
+                                    "iscrowd": int(is_crowd),
+                                    "area": int(area),
+                                })
 
-                    # for each image in the batch store detections and ground truths
-                    for b in batch_len:  
-                        for k in k_filtered:
-                            prediction.append({
-                                "image_id": image_id,
-                                "category_id": int(cids[b, k]),
-                                "bbox": list(map(_to_float, bboxes[b, k, :])),
-                                "score": _to_float(scores[b, k]),
-                            })
+                                # increase, must be unique
+                                gt_ann_id += 1
 
-                        for n in n_image_objs:
-                            # area is used to group the AP evaluation into small, medium, large objects
-                            # depending on the bbox area in pixels given fixed thresholds (see COCO)
-                            area = gt_bboxes[b, n, 2] * gt_bboxes[b, n, 3]  # number of pixels
-
-                            ground_truth["annotations"].append({
-                                "image_id": int(image_id),
-                                "category_id": int(gt_cids[b, n]),
-                                "bbox": gt_bboxes[b, n].tolist(),
-                                "id": int(gt_ann_id),  # each annotation has to have a unique id
-                                "iscrowd": int(is_crowd),
-                                "area": int(area),
+                            ground_truth["images"].append({
+                                "id": int(image_id),
                             })
 
                             # increase, must be unique
-                            gt_ann_id += 1
+                            image_id += 1
 
-                        ground_truth["images"].append({
-                            "id": int(image_id),
-                        })
+                        if i % opt.val_vis_interval == 0  and i != 0:
+                            batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
+                            output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
+                            
+                            add_dt(writer, "Val/DT", i, output, batch, opt)
+                            add_gt(writer, "Val/GT", i, output, batch, opt)
+                            add_hms(writer, "Val/HMS", i, output, batch)
 
-                        # increase, must be unique
-                        image_id += 1
+                        if val_meter.get_avg("total_loss") <= best_loss:
+                            best_loss = val_meter.get_avg("total_loss")
 
-                    if i % opt.val_vis_interval == 0  and i != 0:
-                        batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
-                        output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
-                        
-                        add_dt(writer, "Val/DT", i, output, batch, opt)
-                        add_gt(writer, "Val/GT", i, output, batch, opt)
-                        add_hms(writer, "Val/HMS", i, output, batch)
+                            if isinstance(model, nn.DataParallel):
+                                state_dict = model.module.state_dict()
+                            else:
+                                state_dict = model.state_dict()
+                            
+                            torch.save({
+                                'loss': best_loss,
+                                'nsample': num_tot_train_samples,
+                                'model_state_dict': state_dict,
+                                'optimizer_state_dict': optimizer.state_dict(),
+                            }, f"./models/best_model.pth")
 
-                    if val_meter.get_avg("total_loss") <= best_loss:
-                        best_loss = val_meter.get_avg("total_loss")
+                        ### RESET ###
+                        logging.debug(f"num_val_samples: {} >= opt.val_len: {opt.val_len} ?")
+                        if num_val_samples >= opt.val_len:  
+                            logging.debug(f"RESET -> num_val_samples: {num_val_samples}")
 
-                        if isinstance(model, nn.DataParallel):
-                            state_dict = model.module.state_dict()
-                        else:
-                            state_dict = model.state_dict()
-                        
-                        torch.save({
-                            'loss': best_loss,
-                            'nsample': num_tot_train_samples,
-                            'model_state_dict': state_dict,
-                            'optimizer_state_dict': optimizer.state_dict(),
-                        }, f"./models/best_model.pth")
+                            # reset validation counters/status trackers
+                            val_flag = False
+                            num_val_samples = 0
 
-                    ### RESET ###
-                    if num_val_samples >= opt.val_len:  
-                        # reset validation counters/status trackers
-                        val_flag = False
-                        num_val_samples = 0
+                            # we can reset the ids
+                            image_id = 0
+                            gt_ann_id = 0
 
-                        # we can reset the ids
-                        image_id = 0
-                        gt_ann_id = 0
+                            ### AP EVALUATION ###
+                            gtFile = f"{opt.eval_folder}/gt{num_tot_train_samples}.json"
+                            dtFile = f"{opt.eval_folder}/dt{num_tot_train_samples}.json"
+                            # we save the ground_truths and predictions after each validation run
+                            json.dump(ground_truth, open(gtFile, "w"))
+                            json.dump(prediction, open(dtFile, "w"))
 
-                        ### AP EVALUATION ###
-                        gtFile = f"{opt.eval_folder}/gt{num_tot_train_samples}.json"
-                        dtFile = f"{opt.eval_folder}/dt{num_tot_train_samples}.json"
-                        # we save the ground_truths and predictions after each validation run
-                        json.dump(ground_truth, open(gtFile))
-                        json.dump(prediction, open(dtFile))
+                            # reset ground truths and predictions
+                            ground_truth = empty_gt_dict()
+                            prediction = []
 
-                        # reset ground truths and predictions
-                        ground_truth = empty_gt_dict()
-                        prediction = []
+                            # when under a certain training loss treshold we adapt the class distribution
+                            # to favor the weakly classified samples
+                            train_total_loss = train_meter.get_avg("total_loss")
+                            logging.debug(f"train_total_loss: {train_total_loss} < opt.loss_thresh: {opt.loss_thresh} ?")
+                            
+                            ### UPDATE ###
+                            if train_total_loss < opt.loss_thres:
 
-                        # when under a certain training loss treshold we adapt the class distribution
-                        # to favor the weakly classified samples
-                        if train_meter.get_avg("total_loss") < opt.loss_thres:
-
-                            if toggle_flag:  # increase num. of objects per image to increase difficulty
-                                for remote in remotes:
+                                if toggle_flag:  # increase num. of objects per image to increase difficulty
+                                    logging.debug(f"UPDATE -> num_objects: {num_objects}")
                                     num_objects += opt.obj_step
                                     if num_objects > opt.n_max:
                                         num_objects = opt.n_max
-                                    # change num. of objects
-                                    remote.send(num_objects=num_objects)
 
-                            else:  # change class distribution to increase difficulty
-                                cocoGt = COCO(gtFile)
-                                cocoDt = cocoGt.loadRes(dtFile)
+                                    for remote in remotes:
+                                        # change num. of objects
+                                        remote.send(num_objects=num_objects)
+                                    logging.debug(f"UPDATE -> num_objects: {num_objects}")
 
-                                # get class based AP metrics
-                                cq = COCOQuery(cocoGt, cocoDt)
-                                precs = np.zeros((len(GROUPS), ))
+                                else:  # change class distribution to increase difficulty
+                                    logging.debug(f"UPDATE -> cls_distr: {cls_distr}")
 
-                                for cls_id in range(len(GROUPS)):  # cls_id: 0 - 5 
-                                    # precision over all IoUs 0.5 - 0.95 for a single class
-                                    precs[cls_id] = cq.ap(klass=cls_id)  # scalar AP value  
+                                    cocoGt = COCO(gtFile)
+                                    cocoDt = cocoGt.loadRes(dtFile)
 
-                                weakest_cls = np.argmin(precs, axis=0)  # our labels 0 - 5
-                                # GROUPS maps tless labels to our class groups e.g. 0: [1, 2, 3, 4],...
-                                weakest_tless_clses = GROUPS[weakest_cls]  # tless labels 1 - 30
+                                    # get class based AP metrics
+                                    prec_tensor = coco_eval(cocoGt, cocoDt)
 
-                                # blender intern 0 - 29
-                                weakest_tless_clses = [cls_id - 1 for cls_id in weakest_tless_clses]
+                                    precs = np.zeros((len(GROUPS), ))
 
-                                # add +1 over all members of the weakest class 
-                                n_weak_members = len(weakest_tless_clses)
-                                # thus add 1.0 / all weakest class members
-                                value = 1.0 / n_weak_members 
+                                    for cls_id in range(len(GROUPS)):  # cls_id: 0 - 5 
+                                        # precision over all IoUs 0.5 - 0.95 for a single class
+                                        precs[cls_id] = ap_values(prec=prec_tensor,
+                                            klass=cls_id)  # scalar AP value  
 
-                                # update the class distribution
-                                for cls_id in weakest_tless_clses:
-                                    cls_distr[cls_id] += value
+                                    weakest_cls = np.argmin(precs, axis=0)  # our labels 0 - 5
+                                    logging.debug(f"UPDATE -> weakest_cls(0 - 5): {weakest_cls}")
 
-                                # change class distribution s.t. the low AP classes are more likely
-                                for remote in remotes:
-                                    # changed class distribution, cls ids blender intern 0 - 29
-                                    remote.send(object_cls_prob=cls_distr)
-                            
-                            # alternate between changing num. of objects and class distribution
-                            if num_objects == opt.n_max:
-                                # always change class distribution if max objs reached
-                                toggle_flag = False  
-                            else:  
-                                toggle_flag = not toggle_flag 
+                                    # GROUPS maps tless labels to our class groups e.g. 0: [1, 2, 3, 4],...
+                                    weakest_tless_clses = GROUPS[weakest_cls]  # tless labels 1 - 30
 
-                        # reset meters too
-                        val_meter = MetricMeter()  # then avg is tracked over opt.val_len samples
+                                    # blender intern 0 - 29
+                                    weakest_tless_clses = [cls_id - 1 for cls_id in weakest_tless_clses]
+                                    logging.debug(f"UPDATE -> weakest_tless_clses(0 - 29): {weakest_cls}")
 
-                        # also build a new trainings progress tracker for the avg training loss
-                        train_meter = MetricMeter()
+                                    # add +1 over all members of the weakest class 
+                                    n_weak_members = len(weakest_tless_clses)
+                                    # thus add 1.0 / all weakest class members
+                                    value = 1.0 / n_weak_members 
+
+                                    # update the class distribution
+                                    for cls_id in weakest_tless_clses:
+                                        cls_distr[cls_id] += value
+
+                                    # change class distribution s.t. the low AP classes are more likely
+                                    for remote in remotes:
+                                        # changed class distribution, cls ids blender intern 0 - 29
+                                        remote.send(object_cls_prob=cls_distr)
+                                    
+                                    logging.debug(f"UPDATE -> cls_distr: {cls_distr}")
+                                
+                                # alternate between changing num. of objects and class distribution
+                                if num_objects == opt.n_max:
+                                    # always change class distribution if max objs reached
+                                    toggle_flag = False  
+                                else:  
+                                    toggle_flag = not toggle_flag 
+
+                            # reset meters too
+                            val_meter = MetricMeter()  # then avg is tracked over opt.val_len samples
+
+                            # also build a new trainings progress tracker for the avg training loss
+                            train_meter = MetricMeter()
 
                 ### TRAINING ###
                 else:
@@ -664,7 +713,7 @@ def main(opt):
 if __name__ == '__main__':
     import logging
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=logging.DEBUG)
 
     opt = Config("./configs/config.txt")
     
