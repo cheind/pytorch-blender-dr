@@ -80,7 +80,19 @@ def main():
         else:
             position_gen = rasterize_cam(cam)
             lfrom = next(position_gen)  # take a controlled camera step
-            print(lfrom)
+
+    def pre_frame(duplex):
+        nonlocal update_id, cfg
+        msg = duplex.recv(timeoutms=0)
+
+        if msg != None:
+            # cfg['scene.num_objects'] = msg["num_objects"]
+            # cfg['scene.object_cls_prob'] = msg["object_cls_prob"]
+
+            # the solution above won't work since msg can or cannot
+            # contain one of the above keys, use:
+            cfg = {**cfg, **msg}
+            update_id += 1
 
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
@@ -94,7 +106,8 @@ def main():
                     image=off.render(), 
                     bboxes=bboxes,
                     visfracs=visfracs,
-                    cids=annotation.classids(objs)
+                    cids=annotation.classids(objs),
+                    update_id=update_id,
                 )
                 if cfg["camera.random"]:
                     randomize_cam(cam)
@@ -102,7 +115,6 @@ def main():
                     # take all specified positions if cfg['camera.num_images'] == nradius * ntheta * nphi
                     if j < cfg['camera.num_images']:  # first camera position in pre_anim(cam) !
                         lfrom = next(position_gen)  # take a controlled camera step
-                        print(lfrom)
 
     def post_anim(anim):
         nonlocal objs, occs, step
@@ -126,23 +138,34 @@ def main():
     # Data source
     pub = btb.DataPublisher(btargs.btsockets['DATA'], btargs.btid)
 
+    # Control connection
+    duplex = btb.DuplexChannel(btargs.btsockets['CTRL'], btargs.btid)
+
+    update_id = 0
+
+    # wait for initialization
+    msg = duplex.recv(timeoutms=10 ** 9)
+
+    # cfg is a dictionary created by parsing a json config file once
+    cfg['scene.num_objects'] = msg["num_objects"]
+    cfg['scene.object_cls_prob'] = msg["object_cls_prob"]
+
     # Setup default image rendering
     cam = btb.Camera()
 
-    # for col in bpy.data.collections:
-    #     print(col.name)
-    #     print(col.objects[:])
-
     # without compositor
-    # off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
-    # off.set_render_style(shading='RENDERED', overlays=False)
+    off = btb.OffScreenRenderer(camera=cam, mode='rgb', gamma_coeff=2.2)
+    off.set_render_style(shading='RENDERED', overlays=False)
 
     # with compositor
-    off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
+    # off = btb.Renderer(btargs.btid, camera=cam, mode='rgb', gamma_coeff=2.0)
 
     # Setup the animation and run endlessly
     anim = btb.AnimationController()
     anim.pre_animation.add(pre_anim, cam)
+
+    anim.pre_frame.add(pre_frame, duplex)
+
     anim.post_frame.add(post_frame, off, pub, anim, cam, pre_gen_data)
     anim.post_animation.add(post_anim, anim)
     # Cant use animation system here
