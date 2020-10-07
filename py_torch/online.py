@@ -356,8 +356,8 @@ def add_pr_curve(writer, tag, n_iter, prec, cls_ids):
 
 def main(opt):
 
-    setattr(opt, "vis_thresh", 0.3)
-    setattr(opt, "batch_size", 16)
+    setattr(opt, "vis_thresh", 0.1)
+    setattr(opt, "batch_size", 32)
     setattr(opt, "worker_instances", 4)
     setattr(opt, "weight_decay", 1 ** -3)
 
@@ -536,7 +536,7 @@ def main(opt):
                 logging.debug(f"num_objects: {num_objects}")
 
                 ### VALIDATION ###
-                if i % opt.val_interval == 0 and i != 0 or val_flag:
+                if False: # i % opt.val_interval == 0 and i != 0 or val_flag:
                     logging.debug(f"VALIDATION -> val_flag: {val_flag}")
 
                     with torch.no_grad():
