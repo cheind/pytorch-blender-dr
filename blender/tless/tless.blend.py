@@ -82,12 +82,13 @@ def main():
             lfrom = next(position_gen)  # take a controlled camera step
 
     def pre_frame(duplex):
-        nonlocal cfg
+        nonlocal cfg, update_id
 
         msg = duplex.recv(timeoutms=0)
 
         if msg is not None:
             cfg = {**cfg, **msg}
+            update_id += 1
 
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
