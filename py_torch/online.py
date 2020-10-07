@@ -28,7 +28,7 @@ from .train import train, eval
 from .loss import CenterLoss
 from .model import get_model
 from .decode import decode, filter_dets
-from .visu import render
+from .visu import render, COLORS
 from .utils import Config, FileStream
 from .evaluation import create_gt_anns, evaluate
 
@@ -36,7 +36,7 @@ from tqdm import tqdm
 from .utils import MetricMeter
 from .train import add_dt, add_gt, add_hms
 
-from .coco_report import coco_eval, ap_values
+from .coco_report import coco_eval, ap_values, draw_roc
 
 
 # group classes
@@ -305,6 +305,55 @@ def _to_float(x):
     return float(f"{x:.2f}")
 
 
+def render_cls_distr(cls_distr, opt):
+    """Create matplotlib figure with bar plot of class distribution.
+
+    Args:
+        cls_distr (dict): keys are labels 0 - 29
+    """
+    fig, ax = plt.subplots()
+
+    # map class distribution from 0 - 29 to 1 - 30 to 0 - 5 (our labels)
+    cd = [0 for _ in range(opt.num_classes)]  # initialize
+    
+    for old_cls_id in range(1, 31):  # labels 1 - 30
+        new_cls_id = CLSES_MAP[old_cls_id]  # 0 - 5
+        cd[new_cls_id] += cls_distr[old_cls_id - 1]  # 0 - 29
+    
+    rects = ax.bar(x=list(range(opt.num_classes)), 
+        height=cd, color=COLORS[:opt.num_classes])
+
+    total = sum(cd)
+
+    def autolabel(rects):
+        """Attach a text label above each bar in *rects*, displaying its height."""
+        for rect in rects:
+            height = rect.get_height()
+            ax.annotate(f'{_to_float(height)} / {int(height / total * 100)}%',
+                        xy=(rect.get_x() + rect.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+    autolabel(rects)
+    fig.tight_layout()
+    fig.add_axes(ax)
+    
+    return fig
+
+
+def add_cls_distr(writer, tag, n_iter, cls_distr, opt):
+    """ Add class distribution bar plot to tensorboard writer """
+    fig = render_cls_distr(cls_distr, opt)
+    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+
+
+def add_pr_curve(writer, tag, n_iter, prec, cls_ids):
+    fig, ax = plt.subplots()
+    draw_roc(prec, cls_ids, ax)
+    plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
+    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+
+
 def main(opt):
 
     setattr(opt, "vis_thresh", 0.3)
@@ -315,32 +364,42 @@ def main(opt):
     setattr(opt, "num_samples", 2 * 10 ** 5)  # num. of samples to train for
 
     # all intervals must be multiple of batch size in current implementation!
-    """
-    setattr(opt, "train_vis_interval", 256)
-    setattr(opt, "val_vis_interval", 32)
-    setattr(opt, "save_interval", 8192)
-    setattr(opt, "val_interval", 1024)
-    setattr(opt, "val_len", 256)  # thus 4 diff scenes, each 64 diff cam pos
-    """
+    setattr(opt, "train_vis_interval", 16 * opt.batch_size)
+    setattr(opt, "val_vis_interval", 2 * opt.batch_size)
+    setattr(opt, "save_interval", 2048 * opt.batch_size)
+    setattr(opt, "val_interval", 256 * opt.batch_size)
+    setattr(opt, "val_len", 32 * opt.batch_size)
+    # if total loss in TRAINING is below that we perform an update step
+    setattr(opt, "loss_thres", 5.0)
 
     ### FOR DEBUGGING ####
-    setattr(opt, "num_samples", 20 * 16)  # num. of samples to train for
+    """
+    setattr(opt, "num_samples", 40 * 16)  # num. of samples to train for
     setattr(opt, "train_vis_interval", 2 * 16)
     setattr(opt, "val_vis_interval", 1 * 16)
     setattr(opt, "save_interval", 8192)
     setattr(opt, "val_interval", 4 * 16)  
-    setattr(opt, "val_len", 2 * 16)  # thus 4 diff scenes, each 64 diff cam pos
+    setattr(opt, "val_len", 2 * 16)  
+    setattr(opt, "loss_thres", 25.0)
+    """
     ######################
+
+    # decrease the threshold at 25, 50, 75% of total train samples used
+    setattr(opt, "loss_thres_steps", [0.25, 0.5, 0.75])
+    opt.loss_thres_steps = [opt.num_samples * step for step in opt.loss_thres_steps]
+    opt.finished_loss_update = False
+    opt.loss_thres_index = 0
+
+    # the amount the loss threshold is decreased at each step
+    setattr(opt, "loss_thres_decr", 1.3)
 
     setattr(opt, "augment", True)
     setattr(opt, "camera_noise", True)  # camera noise augmentation
 
     setattr(opt, "eval_folder", "./runs/eval")
 
-    setattr(opt, "launch_info", "./launch_info.json")
-
-    # if total loss in TRAINING is below that we perform an update step
-    setattr(opt, "loss_thres", 10.0)
+    setattr(opt, "launch_info", "/mnt/data/launch_info.json")
+    # setattr(opt, "launch_info", "./launch_info.json")
 
     setattr(opt, "n_max", 25)  # max. num. of real objects per image
 
@@ -353,11 +412,11 @@ def main(opt):
     # we start with uniform class distribution of the 1 to 30 class objects
     # in the T-Less data set and will later update the distribution to 
     # populate the scene with more objects we classified weakly
-    cls_distr = {k:1 for k in range(30)}  # in blender intern 1 - 30 is mapped to 0 - 29
+    cls_distr = {k:1 for k in range(30)}  # in blender intern labels: 1 - 30 are 0 - 29
 
     # start with a low number of objects first and increase the number in the validation 
     # step, is constraint: num_objects <= opt.n_max 
-    num_objects = 4
+    num_objects = 10
 
     # over each validation run with lenght opt.val_len we start with
     # an image id of 0 and increase it, for each image we need a unique image
@@ -430,6 +489,9 @@ def main(opt):
 
         writer = SummaryWriter()  # save into ./runs folder
 
+        # add the initial class distribution to tensorboard
+        add_cls_distr(writer, "Class Distribution", 0, cls_distr, opt)
+
         num_tot_train_samples = 0
 
         num_val_samples = 0
@@ -458,7 +520,7 @@ def main(opt):
         toggle_flag = True  # toggle between 2 different update strategies
 
         # train for a given number of samples
-        with tqdm(total=total_iterations) as pbar:
+        with tqdm(total=total_iterations / opt.batch_size) as pbar:
             for i, batch in enumerate(dl):  # iterate over batches
                 i *= opt.batch_size  # num of samples train + val
 
@@ -467,10 +529,11 @@ def main(opt):
                 # track update id
                 update_id = batch["update_id"]  # b,
                 update_id = update_id.float().mean().item()
-                writer.add_scalar("Update id", update_id, global_step=i)
+                writer.add_scalar("Update Id", update_id, global_step=i)
 
                 logging.debug(f"update_id: {update_id}")
                 logging.debug(f"i: {i}")
+                logging.debug(f"num_objects: {num_objects}")
 
                 ### VALIDATION ###
                 if i % opt.val_interval == 0 and i != 0 or val_flag:
@@ -566,7 +629,7 @@ def main(opt):
                             }, f"./models/best_model.pth")
 
                         ### RESET ###
-                        logging.debug(f"num_val_samples: {} >= opt.val_len: {opt.val_len} ?")
+                        logging.debug(f"num_val_samples: {num_val_samples} >= opt.val_len: {opt.val_len} ?")
                         if num_val_samples >= opt.val_len:  
                             logging.debug(f"RESET -> num_val_samples: {num_val_samples}")
 
@@ -581,6 +644,11 @@ def main(opt):
                             ### AP EVALUATION ###
                             gtFile = f"{opt.eval_folder}/gt{num_tot_train_samples}.json"
                             dtFile = f"{opt.eval_folder}/dt{num_tot_train_samples}.json"
+
+                            gt_ann_len = len(ground_truth["annotations"])
+                            logging.debug(f"RESET -> ground_truth #annotations: {gt_ann_len}")
+                            logging.debug(f"RESET -> #predictions: {len(prediction)}")
+
                             # we save the ground_truths and predictions after each validation run
                             json.dump(ground_truth, open(gtFile, "w"))
                             json.dump(prediction, open(dtFile, "w"))
@@ -592,7 +660,7 @@ def main(opt):
                             # when under a certain training loss treshold we adapt the class distribution
                             # to favor the weakly classified samples
                             train_total_loss = train_meter.get_avg("total_loss")
-                            logging.debug(f"train_total_loss: {train_total_loss} < opt.loss_thresh: {opt.loss_thresh} ?")
+                            logging.debug(f"train_total_loss: {train_total_loss} < opt.loss_thres: {opt.loss_thres} ?")
                             
                             ### UPDATE ###
                             if train_total_loss < opt.loss_thres:
@@ -617,12 +685,18 @@ def main(opt):
                                     # get class based AP metrics
                                     prec_tensor = coco_eval(cocoGt, cocoDt)
 
+                                    add_pr_curve(writer, "PR Curve", 
+                                        update_id, prec_tensor, cocoGt.getCatIds())
+
                                     precs = np.zeros((len(GROUPS), ))
 
                                     for cls_id in range(len(GROUPS)):  # cls_id: 0 - 5 
                                         # precision over all IoUs 0.5 - 0.95 for a single class
-                                        precs[cls_id] = ap_values(prec=prec_tensor,
-                                            klass=cls_id)  # scalar AP value  
+                                        ap = ap_values(prec=prec_tensor,
+                                            klass=cls_id)  # array: Precision(Recalls)
+                                        ap = ap.mean(0)
+                                        logging.debug(f"cls_id: {cls_id}, ap: {ap}")
+                                        precs[cls_id] = ap
 
                                     weakest_cls = np.argmin(precs, axis=0)  # our labels 0 - 5
                                     logging.debug(f"UPDATE -> weakest_cls(0 - 5): {weakest_cls}")
@@ -647,6 +721,10 @@ def main(opt):
                                     for remote in remotes:
                                         # changed class distribution, cls ids blender intern 0 - 29
                                         remote.send(object_cls_prob=cls_distr)
+
+                                    # add the new class distribution to tensorboard
+                                    add_cls_distr(writer, "Class Distribution", update_id, 
+                                        cls_distr, opt)
                                     
                                     logging.debug(f"UPDATE -> cls_distr: {cls_distr}")
                                 
@@ -699,12 +777,25 @@ def main(opt):
                             'optimizer_state_dict': optimizer.state_dict(),
                         }, f"./models/model_{i}.pth")    
 
+                # update the bar every batch
                 pbar.set_postfix(loss=loss.item())
                 pbar.update()
+
+                if not opt.finished_loss_update: 
+                    loss_thres_step = opt.loss_thres_steps[opt.loss_thres_index]
+                    logging.debug(f"num_tot_train_samples: {num_tot_train_samples} >= loss_thres_step: {loss_thres_step} ?")
+                    if num_tot_train_samples >= loss_thres_step:
+                        logging.debug(f"Loss thres before update: {opt.loss_thres}")
+                        opt.loss_thres -= opt.loss_thres_decr
+                        opt.loss_thres_index += 1
+                        if opt.loss_thres_index == len(opt.loss_thres_steps):
+                            opt.finished_loss_update = True
+                            logging.debug(f"Finished loss update: {opt.finished_loss_update}")
 
                 ### EXIT ###
                 if num_tot_train_samples >= opt.num_samples:
                     # if we exceed/meet the amount of training samples quit training!
+                    logging.debug(f"Exit training at: {num_tot_train_samples} samples!")
                     break
 
             pbar.close()    
@@ -713,6 +804,7 @@ def main(opt):
 if __name__ == '__main__':
     import logging
 
+    # logging.basicConfig(level=logging.INFO)
     logging.basicConfig(level=logging.DEBUG)
 
     opt = Config("./configs/config.txt")
