@@ -81,6 +81,14 @@ def main():
             position_gen = rasterize_cam(cam)
             lfrom = next(position_gen)  # take a controlled camera step
 
+    def pre_frame(duplex):
+        nonlocal cfg
+
+        msg = duplex.recv(timeoutms=0)
+
+        if msg is not None:
+            cfg = {**cfg, **msg}
+
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
             # Instead of generating just one image per simulation,
