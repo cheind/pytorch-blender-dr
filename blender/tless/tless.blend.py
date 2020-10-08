@@ -87,8 +87,9 @@ def main():
         msg = duplex.recv(timeoutms=0)
 
         if msg is not None:
-            cfg = {**cfg, **msg}
-            update_id += 1
+            cfg['scene.num_objects'] = msg.get("num_objects", cfg['scene.num_objects'])                
+            cfg['scene.object_cls_prob'] = msg.get("object_cls_prob", cfg['scene.object_cls_prob'])                       
+            update_id = msg.get("update_id", update_id + 1)
 
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 
