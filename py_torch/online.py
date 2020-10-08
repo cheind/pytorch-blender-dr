@@ -529,6 +529,7 @@ def main(opt):
                 batch = {k: v.to(device) for k, v in batch.items()}
 
                 ### VISUALIZE STREAM DATA FOR DEBUGGING ###
+                """
                 for j in range(opt.batch_size):
                     batch_ = {k: v[j:j+1, ...] for k, v in batch.items()}
 
@@ -556,6 +557,7 @@ def main(opt):
                     render(image, dets, opt, show=False, save=True, 
                         denormalize=True, path=f"./stream_images/{n:03d}.png", ret=False)
                     n += 1
+                """
                 ###
 
                 # track update id
@@ -568,7 +570,7 @@ def main(opt):
                 logging.debug(f"num_objects: {num_objects}")
 
                 ### VALIDATION ###
-                if False: # i % opt.val_interval == 0 and i != 0 or val_flag:
+                if i % opt.val_interval == 0 and i != 0 or val_flag:
                     logging.debug(f"VALIDATION -> val_flag: {val_flag}")
 
                     with torch.no_grad():
@@ -774,7 +776,7 @@ def main(opt):
                             train_meter = MetricMeter()
 
                 ### TRAINING ###
-                elif False:
+                else:
                     num_tot_train_samples += opt.batch_size  # update samples used for training
                     model.train()
 
@@ -810,7 +812,7 @@ def main(opt):
                         }, f"./models/model_{i}.pth")    
 
                 # update the bar every batch
-                # pbar.set_postfix(loss=loss.item())
+                pbar.set_postfix(loss=loss.item())
                 pbar.update()
 
                 if not opt.finished_loss_update: 
