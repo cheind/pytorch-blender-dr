@@ -519,12 +519,44 @@ def main(opt):
 
         toggle_flag = True  # toggle between 2 different update strategies
 
+        n = 0  # FOR DEBUGGING
+
         # train for a given number of samples
         with tqdm(total=total_iterations / opt.batch_size) as pbar:
             for i, batch in enumerate(dl):  # iterate over batches
                 i *= opt.batch_size  # num of samples train + val
 
                 batch = {k: v.to(device) for k, v in batch.items()}
+
+                ### VISUALIZE STREAM DATA FOR DEBUGGING ###
+                for j in range(opt.batch_size):
+                    batch_ = {k: v[j:j+1, ...] for k, v in batch.items()}
+
+                    image = batch_["image"]  # original image
+
+                    # build gt dets
+                    inds = batch_["cpt_ind"]  # 1 x n_max
+                    wh = batch_["wh"]  # 1 x n_max x 2
+                    cids = batch_["cls_id"]  # 1 x n_max
+                    mask = batch_["cpt_mask"].squeeze(0)  # n_max,
+                    
+                    ws = wh[..., 0]  # 1 x n_max
+                    hs = wh[..., 1]  # 1 x n_max
+                    wl = opt.w / opt.down_ratio
+                    ys = torch.true_divide(inds, wl).int().float()  # 1 x n_max
+                    xs = (inds % wl).int().float()  # 1 x n_max
+                    scores = torch.ones_like(cids)  # 1 x n_max
+                    
+                    dets = torch.stack([xs - ws / 2, ys - hs / 2, 
+                        ws, hs, scores, cids], dim=-1)  # 1 x n_max x 6
+
+                    dets = dets[:, mask.bool()]  # 1 x n' x 6
+                    dets[..., :4] = dets[..., :4] * opt.down_ratio
+
+                    render(image, dets, opt, show=False, save=True, 
+                        denormalize=True, path=f"./stream_images/{n:03d}.png", ret=False)
+                    n += 1
+                ###
 
                 # track update id
                 update_id = batch["update_id"]  # b,
@@ -742,7 +774,7 @@ def main(opt):
                             train_meter = MetricMeter()
 
                 ### TRAINING ###
-                else:
+                elif False:
                     num_tot_train_samples += opt.batch_size  # update samples used for training
                     model.train()
 
@@ -778,7 +810,7 @@ def main(opt):
                         }, f"./models/model_{i}.pth")    
 
                 # update the bar every batch
-                pbar.set_postfix(loss=loss.item())
+                # pbar.set_postfix(loss=loss.item())
                 pbar.update()
 
                 if not opt.finished_loss_update: 

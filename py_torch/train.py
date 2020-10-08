@@ -41,7 +41,8 @@ def add_gt(writer, tag, n_iter, output, batch, opt):
     dets = dets[:, mask.bool()]  # 1 x n' x 6
     dets[..., :4] = dets[..., :4] * opt.down_ratio
 
-    fig = render(image, dets, opt, show=False, save=False, path=None, ret=True)
+    fig = render(image, dets, opt, show=False, save=False, 
+        denormalize=True, path=None, ret=True)
     writer.add_figure(tag, fig, global_step=n_iter, close=True)
 
 
