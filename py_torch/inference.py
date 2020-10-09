@@ -273,15 +273,15 @@ def main(opt):
     heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
     model = get_model(heads)
 
-    epoch = checkpoint["epoch"]
-    best_loss = checkpoint["loss"]
+    #epoch = checkpoint["epoch"]
+    #best_loss = checkpoint["loss"]
     model.load_state_dict(checkpoint['model_state_dict'])
 
     model.to(device=device)
     model.eval()
 
-    logging.info(f"Loaded model from: {opt.model_path}" \
-                f" trained till epoch: {epoch} with best loss: {best_loss}")
+    # logging.info(f"Loaded model from: {opt.model_path}" \
+    #             f" trained till epoch: {epoch} with best loss: {best_loss}")
 
     pred = []
     with torch.no_grad():

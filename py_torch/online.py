@@ -359,14 +359,14 @@ def main(opt):
     setattr(opt, "vis_thresh", 0.1)
     setattr(opt, "batch_size", 32)
     setattr(opt, "worker_instances", 4)
-    setattr(opt, "weight_decay", 1 ** -3)
+    setattr(opt, "weight_decay", 10 ** -3)
 
     setattr(opt, "num_samples", 2 * 10 ** 5)  # num. of samples to train for
 
     # all intervals must be multiple of batch size in current implementation!
     setattr(opt, "train_vis_interval", 16 * opt.batch_size)
     setattr(opt, "val_vis_interval", 2 * opt.batch_size)
-    setattr(opt, "save_interval", 2048 * opt.batch_size)
+    setattr(opt, "save_interval", 1024 * opt.batch_size)
     setattr(opt, "val_interval", 256 * opt.batch_size)
     setattr(opt, "val_len", 32 * opt.batch_size)
     # if total loss in TRAINING is below that we perform an update step
@@ -647,25 +647,29 @@ def main(opt):
                             add_gt(writer, "Val/GT", i, output, batch, opt)
                             add_hms(writer, "Val/HMS", i, output, batch)
 
-                        if val_meter.get_avg("total_loss") <= best_loss:
-                            best_loss = val_meter.get_avg("total_loss")
-
-                            if isinstance(model, nn.DataParallel):
-                                state_dict = model.module.state_dict()
-                            else:
-                                state_dict = model.state_dict()
-                            
-                            torch.save({
-                                'loss': best_loss,
-                                'nsample': num_tot_train_samples,
-                                'model_state_dict': state_dict,
-                                'optimizer_state_dict': optimizer.state_dict(),
-                            }, f"./models/best_model.pth")
-
                         ### RESET ###
                         logging.debug(f"num_val_samples: {num_val_samples} >= opt.val_len: {opt.val_len} ?")
                         if num_val_samples >= opt.val_len:  
                             logging.debug(f"RESET -> num_val_samples: {num_val_samples}")
+
+                            avg_total_loss_val = val_meter.get_avg("total_loss")
+                            logging.debug(f"avg_total_loss_val: {avg_total_loss_val} <= best_loss: {best_loss} ?")
+                            if avg_total_loss_val <= best_loss:
+                                best_loss = val_meter.get_avg("total_loss")
+
+                                if isinstance(model, nn.DataParallel):
+                                    state_dict = model.module.state_dict()
+                                else:
+                                    state_dict = model.state_dict()
+                                
+                                torch.save({
+                                    'loss': best_loss,
+                                    'nsample': num_tot_train_samples,
+                                    'model_state_dict': state_dict,
+                                    'optimizer_state_dict': optimizer.state_dict(),
+                                }, f"./models/best_model.pth")
+                                logging.debug("Saved new best model!")
+
 
                             # reset validation counters/status trackers
                             val_flag = False
@@ -769,9 +773,9 @@ def main(opt):
                                 else:  
                                     toggle_flag = not toggle_flag 
 
+                            logging.debug("Reset MetricMeters!")
                             # reset meters too
                             val_meter = MetricMeter()  # then avg is tracked over opt.val_len samples
-
                             # also build a new trainings progress tracker for the avg training loss
                             train_meter = MetricMeter()
 
@@ -798,7 +802,8 @@ def main(opt):
                         add_gt(writer, "Train/GT", i, output, batch, opt)
                         add_hms(writer, "Train/HMS", i, output, batch)
 
-                    if i % opt.save_interval == 0 and i != 0:
+                    if (num_tot_train_samples % opt.save_interval == 0 
+                        and num_tot_train_samples != 0):
                         if isinstance(model, nn.DataParallel):
                             state_dict = model.module.state_dict()
                         else:
@@ -809,8 +814,11 @@ def main(opt):
                             'nsample': num_tot_train_samples,
                             'model_state_dict': state_dict,
                             'optimizer_state_dict': optimizer.state_dict(),
-                        }, f"./models/model_{i}.pth")    
+                        }, f"./models/model_{num_tot_train_samples}.pth")   
 
+                    logging.debug(f'avg total loss train from meter: {train_meter.get_avg("total_loss")}')
+                    logging.debug(f"opt.loss_thres: {opt.loss_thres}")    
+                     
                 # update the bar every batch
                 pbar.set_postfix(loss=loss.item())
                 pbar.update()
