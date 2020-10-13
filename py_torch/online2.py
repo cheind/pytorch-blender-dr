@@ -78,7 +78,7 @@ class Trans:
         ]
 
         if opt.camera_noise:
-            transformations.append(A.GaussNoise(p=1.0, var_limit=(10, 60)))
+            transformations.append(A.GaussNoise(p=1.0, var_limit=(10, 40)))
 
         if opt.augment:  # augment on smaller dimensions for performance
             transformations.extend([
@@ -190,7 +190,7 @@ class Trans:
         bboxes = item['bboxes']  # n x 4
         cids = item["cids"]  # n,
 
-        update_id = item["update_id"]
+        #update_id = item["update_id"]
 
         h, w = image.shape[:2]
 
@@ -272,7 +272,7 @@ class Trans:
             "cids": cids,  # n_max,
 
             # current update state of the remote data generator
-            "update_id": update_id,
+            #"update_id": update_id,
         }
         return item
     
@@ -359,7 +359,8 @@ def main(opt):
     setattr(opt, "vis_thresh", 0.1)
     setattr(opt, "batch_size", 32)
     setattr(opt, "worker_instances", 4)
-    setattr(opt, "weight_decay", 10 ** -3)
+    #setattr(opt, "weight_decay", 10 ** -3)
+    setattr(opt, "weight_decay", 0)
 
     setattr(opt, "num_samples", 2 * 10 ** 5)  # num. of samples to train for
 
@@ -372,6 +373,8 @@ def main(opt):
     # if total loss in TRAINING is below that we perform an update step
     # setattr(opt, "loss_thres", 5.0) TODO
     setattr(opt, "loss_thres", 0.01)
+
+    setattr(opt, "lr", 0.001)  # times 8
 
     ### FOR DEBUGGING ####
     """
@@ -394,8 +397,10 @@ def main(opt):
     # the amount the loss threshold is decreased at each step
     setattr(opt, "loss_thres_decr", 1.3)
 
-    setattr(opt, "augment", True)
-    setattr(opt, "camera_noise", True)  # camera noise augmentation
+    #setattr(opt, "augment", True)
+    setattr(opt, "augment", False)
+    # setattr(opt, "camera_noise", True)  # camera noise augmentation
+    setattr(opt, "camera_noise", False)  # camera noise augmentation
 
     setattr(opt, "eval_folder", "./runs/eval")
 
@@ -436,16 +441,16 @@ def main(opt):
     trans = Trans(opt)
 
     with ExitStack() as es:
-        launch_info = btt.LaunchInfo.load_json(opt.launch_info)
-        data_addr = launch_info.addresses['DATA']
-        ctrl_addr = launch_info.addresses['CTRL']  # array of addresses
+        # launch_info = btt.LaunchInfo.load_json(opt.launch_info)
+        # data_addr = launch_info.addresses['DATA']
+        # ctrl_addr = launch_info.addresses['CTRL']  # array of addresses
 
-        # Provides generic bidirectional communication with a single PyTorch instance
-        remotes = [btt.DuplexChannel(addr) for addr in ctrl_addr]
+        # # Provides generic bidirectional communication with a single PyTorch instance
+        # remotes = [btt.DuplexChannel(addr) for addr in ctrl_addr]
 
-        # initialize num. of objects and class distribution of remote
-        for remote in remotes:
-            remote.send(num_objects=num_objects, object_cls_prob=cls_distr)
+        # # initialize num. of objects and class distribution of remote
+        # for remote in remotes:
+        #     remote.send(num_objects=num_objects, object_cls_prob=cls_distr)
 
         """
         Other side (remote, blender):
@@ -464,21 +469,26 @@ def main(opt):
 
         # Setup a streaming dataset
         # Iterable datasets do not support shuffle
-        ds = btt.RemoteIterableDataset(
-            data_addr,
-            max_items=10**8,
-            item_transform=item_filter(trans.item_transform, opt.vis_thres)
-        )
+        # ds = btt.RemoteIterableDataset(
+        #     data_addr,
+        #     max_items=10**8,
+        #     item_transform=item_filter(trans.item_transform, opt.vis_thres)
+        # )
+        # shuffle = False
+
+        opt.train_path = "/mnt/data/20201001_tless_refine/tless"
+        ds = btt.FileDataset(opt.train_path, item_transform=item_filter(trans.item_transform, opt.vis_thres))
+        shuffle = True
+        #shuffle = False
 
         # Setup DataLoader
         dl = data.DataLoader(ds, batch_size=opt.batch_size, 
-            num_workers=opt.worker_instances, shuffle=False)
+            num_workers=opt.worker_instances, shuffle=shuffle)
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         loss_fn = CenterLoss()
-        model = get_model({"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2})
-        #model = get_model({"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}, pretrained=False)
+        model = get_model({"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}, pretrained=True)
         model.to(device)
 
         if torch.cuda.device_count() > 1:
@@ -564,11 +574,11 @@ def main(opt):
                 ###
 
                 # track update id
-                update_id = batch["update_id"]  # b,
-                update_id = update_id.float().mean().item()
-                writer.add_scalar("Update Id", update_id, global_step=i)
+                # update_id = batch["update_id"]  # b,
+                # update_id = update_id.float().mean().item()
+                # writer.add_scalar("Update Id", update_id, global_step=i)
 
-                logging.debug(f"update_id: {update_id}")
+                # logging.debug(f"update_id: {update_id}")
                 logging.debug(f"i: {i}")
                 logging.debug(f"num_objects: {num_objects}")
 

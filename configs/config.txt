@@ -13,8 +13,8 @@ record: False
 record_path: /mnt/data/20200916_TLess_visibility/tless
 
 # Relevant for inference or resuming of training
-# model_path: ./models/best_model.pth
-model_path: ./models/model_98304.pth
+model_path: ./models/best_model.pth
+#model_path: ./models/model_98304.pth
 
 # Inference
 # real: /mnt/data/tless_test_real/test_primesense
