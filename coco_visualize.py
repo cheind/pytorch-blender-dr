@@ -13,8 +13,8 @@ import seaborn as sns
 sns.set_context('paper', rc={'lines.linewidth': 1.5}, font_scale=1.1)
 sns.set_style('whitegrid', {'font.family':'serif', 'font.serif':'Times New Roman'})
 
-LINEWIDTH=1.5
-FONTSIZE=10
+LINEWIDTH=3.5
+FONTSIZE=20
 DPI=96
 
 def get_cmap(n, name='hsv'):
@@ -71,10 +71,19 @@ def render(img_id, coco_gt, coco_dt, ds_path, cat_ids=None, legend=True, min_sco
     
     for ann in gt_anns:
         draw_bbox(ax, ann['bbox'], text=None, linestyle='-', color=colors[ann['category_id']])
-        
+    
+    yield fig
+    plt.close(fig)
+
+    fig = plt.figure(figsize=(img.shape[1]/DPI*scale, img.shape[0]/DPI*scale), dpi=DPI, frameon=False)
+    ax = fig.add_axes([0,0,1.,1.])    
+    ax.imshow(img, origin='upper')
+    ax.set_axis_off()
+    ax.autoscale(False)
+
     for ann in dt_anns:  # linestyle='--'
         text = f'{ann["score"]:.2f}' if show_score else None
-        draw_bbox(ax, ann['bbox'], text=text, linestyle='--', color=colors[ann['category_id']])
+        draw_bbox(ax, ann['bbox'], text=text, linestyle='-', color=colors[ann['category_id']])
         
     if legend:
         legend_elements = [Line2D([0], [0], linestyle='-', color='k', label='Groundtruth'),
@@ -82,7 +91,7 @@ def render(img_id, coco_gt, coco_dt, ds_path, cat_ids=None, legend=True, min_sco
         legend_elements.extend([Line2D([0], [0], marker='o', color=colors[c], label=f'Cat.{c}') for c in cat_ids])
         ax.legend(handles=legend_elements, loc='upper center', ncol=4, prop={'size': FONTSIZE})
         
-    return fig
+    yield fig
 
 def main():
     parser = argparse.ArgumentParser()
@@ -113,14 +122,17 @@ def main():
     else:
         ids = cocoGt.getImgIds()
 
+    selection = [62, 176, 725, 356, 593]
+
     with tqdm(total=len(ids)) as pbar:
         for idx in ids:
-            fig = render(idx, cocoGt, cocoDt, dspath, min_score=args.min_score, show_score=True, scale=args.scale, legend=False)
-            if args.save:
-                fig.savefig(f'tmp/cocoeval_{idx:04d}.png')
-            else:
-                plt.show()
-            plt.close(fig)
+            if args.save and idx in selection:
+                gen = render(idx, cocoGt, cocoDt, dspath, min_score=args.min_score, show_score=True, scale=args.scale, legend=False)
+                fig = next(gen)
+                fig.savefig(f'tmp/cocoeval_{idx:04d}_gt.png')
+                fig = next(gen)
+                fig.savefig(f'tmp/cocoeval_{idx:04d}_pred.png')
+                plt.close(fig)
             pbar.update()
         pbar.refresh()
 
