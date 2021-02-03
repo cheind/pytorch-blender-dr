@@ -11,6 +11,8 @@ def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids,
     path):
     """Create ground truth annotations for evaluation. 
 
+    ATTENTION: BBOXES IN COCO FORMAT
+
     Args:
         rbg_relpaths (list): relative paths to image files
         all_bboxes (list): bboxes for each image
@@ -21,53 +23,42 @@ def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids,
     images = []
     annotations = []
     id = 0
-
-    logging.info(f"Save ground truth annotations at: {path}")
-    logging.info("Assume COCO bbox format: xmin, ymin, width, height")
-
+    logging.info(f"Save gt. ann. file @ {path}")
     start_time = time.time()
 
     for image_id, (fpath, bboxes, category_ids) in enumerate(zip(rbg_relpaths, all_bboxes, all_category_ids)):
         images.append({"id": int(image_id), "file_name": str(fpath)})
-
-        is_crowd = 0  # crowd annotation? NO! => 0
-
+ 
         # iterate over all bboxes for the current image
         for category_id, bbox in zip(category_ids, bboxes):
             # bbox format: x, y, w, h
-            # area doesn't have to be precise, just to get metrics
-            # over different object sizes: small, medium, large
-            area = bbox[2] * bbox[3]  # number of pixels
+            area = bbox[2] * bbox[3]  # in pixels
 
             annotations.append({
                 "image_id": int(image_id),
                 "category_id": int(category_id),
                 "bbox": bbox.tolist(),
-                "id": int(id),  # each annotation has to have a unique id
-                "iscrowd": int(is_crowd),
+                 # each annotation must have a unique id
+                "id": int(id),  
+                "iscrowd": 0,
                 "area": int(area),
             })
             id += 1
 
     gt.update({"images": images, "annotations": annotations})
     json.dump(gt, open(path, "w"))
+    logging.info(f"Elapsed time: {time.time() - start_time} s")
 
-    logging.info(f"Saved annotations. Elapsed time: {time.time() - start_time} s")
+def evaluate(gtFile: str, dtFile: str, annType = 'bbox'):
+    cocoGt = COCO(gtFile)  # .json files
+    cocoDt = cocoGt.loadRes(dtFile)  # .json files
 
-
-def evaluate(gtFile, dtFile, annType = 'bbox'):
-    """ Evaluates content of ground truth and detection .json files. """
-    cocoGt = COCO(gtFile)
-    cocoDt = cocoGt.loadRes(dtFile)
-
-    cocoEval = COCOeval(cocoGt,cocoDt,annType)
+    cocoEval = COCOeval(cocoGt, cocoDt, annType)
     cocoEval.evaluate()
     cocoEval.accumulate()
     cocoEval.summarize()
 
-
 if __name__ == "__main__":
-    # ground truth example
     gt = {
         "images":[
             {"id": 73}, 
@@ -106,8 +97,7 @@ if __name__ == "__main__":
         ]
     }
 
-    # detection example
-    res = [
+    dets = [
         {
             "image_id":73,
             "category_id":1,
@@ -130,13 +120,8 @@ if __name__ == "__main__":
 
     gtFile = './ann.json'
     dtFile='./res.json'
-
-    # save ground truths
     json.dump(gt, open(gtFile, "w"))
-
-    # save detections
-    json.dump(res, open(dtFile, "w"))
-
+    json.dump(dets, open(dtFile, "w"))
     evaluate(gtFile, dtFile)
 
     """

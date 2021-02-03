@@ -1,46 +1,63 @@
-# https://github.com/KaiyangZhou/Dassl.pytorch
 from collections import defaultdict
 import torch
 import numpy as np
-
-# to redirect evaluations
 import sys
 import io
 
+def generate_heatmap(shape, xy: np.ndarray, mask=None, sigma=2, cutoff=1e-3, bleed=True):
+    """
+    Generates a single belief map of 'shape' for each point in 'xy'.
 
-class FileStream:
-    """ Redirect stdout output to a file. """
+    Parameters
+    ----------
+    shape: tuple
+        h x w of image
+    xy: n x 2
+        n points with x, y coordinates (image coordinate system)
+    mask: n,
+        zero-one mask to select points from xy
+    sigma: scalar
+        gaussian sigma
+    cutoff: scalar
+        set belief to zero if it is less then cutoff
 
-    def __init__(self, filepath: str, parser: callable):
-        self.filepath = filepath
-        self.file = None
-        self.buffer = io.StringIO()
-        self.parser = parser
+    Returns
+    -------
+    belief map: 1 x h x w
+    """
+    n = xy.shape[0]
+    h, w = shape[:2] 
 
-    def write(self, s):
-        self.buffer.write(s)  # redirect to buffer
-        sys.__stdout__.write(s)  # and print it to console
+    if n == 0:
+        return np.zeros((1, h, w), dtype=np.float32)
 
-    def __enter__(self):
-        self.file = open(self.filepath, "w+")
-        sys.stdout = self
+    if not bleed:
+        wh = np.asarray([w - 1, h - 1])[None, :]
+        mask_ = np.logical_or(xy[..., :2] < 0, xy[..., :2] > wh).any(-1)
+        xy = xy.copy()
+        xy[mask_] = np.nan
 
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        out = self.parser(self.buffer.getvalue())
-        self.file.write(out)
-        self.buffer.close()
-        self.file.close()
-        sys.stdout = sys.__stdout__
+    # grid is 2 x h x h
+    grid = np.array(np.meshgrid(np.arange(w), np.arange(h)), dtype=np.float32)
+    # reshape grid to 1 x 2 x h x w
+    grid = grid.reshape((1, 2, h, w))
+    # reshape xy to n x 2 x 1 x 1
+    xy = xy.reshape((n, 2, 1, 1))
+    # compute squared distances to joints
+    d = ((grid - xy) ** 2).sum(1)
+    # compute gaussian
+    b = np.nan_to_num(np.exp(-(d / (2.0 * sigma ** 2))))
+    b[(b < cutoff)] = 0  # b is n x h x w
 
+    if mask is not None:
+        # set the invalid center point maps to all zero
+        b *= mask[:, None, None]  # n x h x w
+
+    b = b.max(0, keepdims=True)  # 1 x h x w
+    b[b >= 0.95] = 1  # targets are exactly 1 at discrete positions 
+    return b  # 1 x h x w
 
 class AverageMeter:
-    """Compute and store the average and current value.
-    Examples::
-        >>> # 1. Initialize a meter to record loss
-        >>> losses = AverageMeter()
-        >>> # 2. Update meter after every mini-batch update
-        >>> losses.update(loss_value, batch_size)
-    """
 
     def __init__(self):
         self.reset()
@@ -59,18 +76,7 @@ class AverageMeter:
         self.count += n
         self.avg = self.sum / self.count
 
-
 class MetricMeter:
-    """Store the average and current value for a set of metrics.
-    Examples::
-        >>> # 1. Create an instance of MetricMeter
-        >>> metric = MetricMeter()
-        >>> # 2. Update using a dictionary as input
-        >>> input_dict = {'loss_1': value_1, 'loss_2': value_2}
-        >>> metric.update(input_dict)
-        >>> # 3. Convert to string and print
-        >>> print(str(metric))
-    """
 
     def __init__(self, delimiter='\t'):
         self.meters = defaultdict(AverageMeter)
@@ -108,8 +114,7 @@ class MetricMeter:
             )
         return self.delimiter.join(output_str)
 
-
-class Config(object):
+class Config:
 
     def __init__(self, config_path):
         with open(config_path, "r") as fh:
@@ -145,14 +150,8 @@ class Config(object):
         info = []
         for k, v in self.__dict__.items():
             info.append(f"{k}: {v}")
-        return "  \n".join(info)  # two blank spaces to be used as tensorboard text too!
+        return "\n".join(info)
 
     def __str__(self):
         return self.__repr__()
-
-
-if __name__ == "__main__":
-    
-    with FileStream('./evaluation/example.txt', parser=lambda x: x):
-        print('hello world\nhey!')
     
