@@ -23,9 +23,12 @@ def item_filter(func, bbox_visibility_threshold):
     
     return inner
 
-class TrainTransformation:
+class Transformation:
 
-    def __init__(self, opt):
+    def __init__(self, opt, bbox_format='coco',
+        augmentations: List = None, normalize=True,
+        resize_crop=False, bboxes=True):
+        super().__init__()
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
         self.num_classes = opt.num_classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
@@ -33,33 +36,63 @@ class TrainTransformation:
         self.mean = opt.mean
         self.std = opt.std
 
-        transformations = [
-            A.SmallestMaxSize(max_size=min(opt.h, opt.w)),
-            A.RandomCrop(height=opt.h, width=opt.w) if opt.augment else A.CenterCrop(height=opt.h, width=opt.w),
-        ]
+        self.train = opt.train 
 
-        if opt.augment:  # augment on smaller dimensions for performance
-            transformations.extend([
-                A.HueSaturationValue(hue_shift_limit=20, 
-                    sat_shift_limit=30, val_shift_limit=20, p=0.5),
-                A.ChannelShuffle(p=0.5),
-                A.HorizontalFlip(p=0.2),
-            ])
+        self.resize_crop = resize_crop
+        self.normalize = normalize
+        self.augmentations = augmentations
+        self.bbox_format = bbox_format 
+        self.bboxes = bboxes
 
-        transformations.append(A.Normalize(mean=opt.mean, std=opt.std))
+        if opt.train:
+            if augmentations is None:
+                # standard augmentation if not given explicitly
+                transformations = [
+                    A.HueSaturationValue(p=0.5),
+                    A.ChannelShuffle(p=0.4),
+                    A.HorizontalFlip(p=0.2),
+                    A.GaussNoise(p=0.3),
+                ]
+            else:
+                transformations = augmentations
 
-        bbox_params = A.BboxParams(
-            format="coco",  # coco format: x_min, y_min, width, height
-            min_area=50,  # < x pixels => drop bbox
-            min_visibility=0.5,  # < original visibility => drop bbox
-        )
+            if resize_crop:
+                transformations.extend([
+                    # Rescale an image so that minimum side is equal to max_size,
+                    # keeping the aspect ratio of the initial image.
+                    A.SmallestMaxSize(max_size=min(opt.h, opt.w)),
+                    # A.CenterCrop(height=opt.h, width=opt.w)
+                    A.RandomCrop(height=opt.h, width=opt.w),
+                ])  
+            
+            if bboxes:
+                bbox_params = A.BboxParams(
+                    # pascal_voc, albumentatons, coco, yolo
+                    format=bbox_format,  
+                    # < min_area (in pixels) will drop bbox
+                    min_area=50,  
+                    # < min_visibility (relative to input bbox) will drop bbox
+                    min_visibility=0.5,  
+                )
+            else:
+                bbox_params = None
+        else:
+            transformations = [
+                # Rescale an image so that maximum side is equal to max_size,
+                # keeping the aspect ratio of the initial image.
+                A.LongestMaxSize(max_size=max(opt.h, opt.w)),
+                A.Normalize(mean=opt.mean, std=opt.std),
+            ]
+            bbox_params = None
 
-        self.transform_fn = A.Compose(transformations, bbox_params=bbox_params)
+        if normalize:  # zero mean, unit variance
+            transformations.append(A.Normalize(mean=opt.mean, std=opt.std))
 
-    def item_transform(self, item):
+        self.transform_fn = A.Compose(transformations, 
+            bbox_params=bbox_params)
+
+    def item_transform_train(item: dict):
         """
-        Transform data for training.
-
         :param item: dictionary
             - image: h x w x 3
             - bboxes: n x 4; [[x, y, width, height], ...]
@@ -77,13 +110,10 @@ class TrainTransformation:
         image = item["image"]  # h x w x 3
         bboxes = item['bboxes']  # n x 4
         cids = item["cids"]  # n,
-
         h, w = image.shape[:2]
 
-        # prepare bboxes for transformation
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)  # n,
         bboxes = np.append(bboxes, bbox_labels[:, None], axis=-1)
-
         transformed = self.transform_fn(image=image, bboxes=bboxes)
         image = np.array(transformed["image"], dtype=np.float32)
         image = image.transpose((2, 0, 1))  # 3 x h x w
@@ -143,3 +173,61 @@ class TrainTransformation:
 
         return item
 
+    def item_transform_test(item: dict):
+        """
+        :param item: dictionary
+            - image: h x w x 3
+            - bboxes: n x 4; [[x, y, width, height], ...]
+            - cids: n,
+
+        :return: dictionary
+            - image: 3 x 512 x 512
+
+            ground truth: 
+            - bboxes: n x 4; [[x, y, width, height], ...]
+            - cids: n,
+        """
+        image = item["image"]
+        image_gt = image.copy()
+        bboxes = item['bboxes']
+        cids = item["cids"]
+        h, w = image.shape[:2]
+
+        transformed = self.transform_fn(image=image))
+        image = np.array(transformed["image"], dtype=np.float32)
+        h, w = image.shape[:2]  # rescaled image
+        shape_pp = np.array(image.shape[:2], dtype=np.float32)
+
+        right = self.w - w
+        bottom = self.h - h
+        image = cv2.copyMakeBorder(image, 0, bottom, 0, right, 
+            cv2.BORDER_CONSTANT, value=0)
+        image = image.transpose((2, 0, 1))  # 3 x h x w
+
+        item.update({
+            "image": image,  # 3 x h x w 
+            "bboxes": bboxes,  # n x 4
+            "cids": cids,  # n,
+            "image_gt": image_gt,  # h x w x 3
+            "shape_pp": shape_pp,  # pre padding shape
+        })
+        return item
+
+    def __call__(self, item):
+        if self.train:
+            return self.item_transform_train(item)
+        else:
+            return self.item_transform_test(item)
+
+def convert_bbox_format(bboxes, source_fmt, target_fmt,
+    h, w):
+    # pascal_voc: [x_min, y_min, x_max, y_max]
+    # albumentatons: normalized [x_min, y_min, x_max, y_max]
+    # coco: [x_min, y_min, width, height]
+    # yolo: normalized [x_center, y_center, width, height]
+    if source_fmt != 'albumentations':
+        bboxes = convert_bboxes_to_albumentations(bboxes, 
+            source_fmt, rows=h, cols=w)
+    bboxes = convert_bboxes_from_albumentations(bboxes,
+        target_fmt, rows=h, cols=w)
+    return bboxes 

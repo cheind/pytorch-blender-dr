@@ -4,6 +4,8 @@ blend_path: C:/Program Files/Blender Foundation/Blender 2.90
 blender_instances: 2
 worker_instances: 4
 
+train: True
+
 # 4
 num_epochs: 4
 # 16

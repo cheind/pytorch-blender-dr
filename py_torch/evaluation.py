@@ -6,7 +6,6 @@ import time
 
 from .main import CATEGORIES
 
-
 def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids, 
     path):
     """Create ground truth annotations for evaluation. 
