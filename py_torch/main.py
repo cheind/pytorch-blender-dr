@@ -16,7 +16,7 @@ from blendtorch import btt
 # relative imports, call with -m option
 # >> python -m py_torch.main
 from .utils import Config
-from .train import train, eval
+from .train import train, eval, use_multiple_devices
 from .loss import CenterLoss
 from .model import get_model
 from .visu import iterate  # iterate over dataloader (debugging)
@@ -25,7 +25,7 @@ from .evaluation import evaluate_model
 from .dataset import TLessDataset
 
 def main(opt):
-
+            
     def load_from_checkpoint(opt):
         if opt.resume or not opt.train:
             nonlocal model
@@ -33,7 +33,7 @@ def main(opt):
             checkpoint = torch.load(opt.model_path_to_load, 
                 map_location='cuda' if opt.use_cuda else 'cpu')
             model.load_state_dict(checkpoint['model'])
-            if opt.train:
+            if opt.train:  # skipt this for inference
                 nonlocal optimizer, scheduler
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 scheduler.load_state_dict(checkpoint['scheduler'])
@@ -59,34 +59,10 @@ def main(opt):
     ] if opt.train else []
     # Resize images to opt.h, opt.w in training
     transformation = Transform(opt, augmentations=augmentations, 
-        filter=opt.stream or opt.replay, resize_crop=opt.train)
+        filter=opt.replay, resize_crop=opt.train)
 
     with ExitStack() as es:
-        if opt.stream:
-            raise NotImplementedError  # TODO
-            logging.info('Stream data from Blender instance(s)...')
-            # Launch Blender instance. 
-            # Upon exit of this script all Blender instances will 
-            # be closed.
-            bl = es.enter_context(
-                btt.BlenderLauncher(
-                    scene=f"{opt.scene}.blend",
-                    script=f"{opt.scene}.blend.py",
-                    num_instances=opt.blender_instances,
-                    named_sockets=['DATA'],
-                    blend_path=opt.blender_path,
-                )
-            )
-            # does not support shuffle
-            ds = btt.RemoteIterableDataset(
-                bl.launch_info.addresses['DATA'],
-                item_transform=transformation,
-            )
-            ds.stream_length(4)
-            if opt.record:
-                ds.enable_recording(opt.record_path)
-            #import pdb; pdb.set_trace()
-        elif opt.replay:
+        if opt.replay:
             logging.info('Use data from Blender replay...')
             ds = btt.FileDataset(
                 opt.train_path, 
@@ -109,29 +85,26 @@ def main(opt):
         model.to(device)
         num_params = sum(p.numel() for p in model.parameters())
         print(f'Model with: {num_params/10**6:.2f}M number of parameters')
-
+            
+        # either we load model (optimizer, scheduler) 
+        # or train from pretrained backbone
+        if opt.train:
+            optimizer = optim.Adam(model.parameters(), 
+                    lr=opt.lr, weight_decay=opt.weight_decay)
+            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
+                step_size=opt.lr_step_size, gamma=0.2)
+        
         load_from_checkpoint(opt)
 
         if not opt.train:  
             logging.info("Runnig script for inference...")
-            model.eval()
             test_dl = data.DataLoader(ds, batch_size=1, 
                 num_workers=opt.worker_instances, shuffle=False)
             evaluate_model(model, test_dl, opt)
         else:
-            logging.info("Runnig script for training...")
-            model.train()
-            optimizer = optim.Adam(model.parameters(), 
-                lr=opt.lr, weight_decay=opt.weight_decay)
-            scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
-                step_size=opt.lr_step_size, gamma=0.2)
+            logging.info("Runnig script for training...")       
             
-            if torch.cuda.device_count() > 1 and torch.cuda.is_available():  
-                num_devices = torch.cuda.device_count()
-                logging.info(f"Available: {num_devices} GPUs!")
-                assert opt.batch_size % num_devices == 0, 'Batch size not divisible by #GPUs'
-                model = nn.DataParallel(model)  # Use all available devices
-            
+            use_multiple_devices(model)
             loss_fn = CenterLoss()
             
             num_samples = len(ds) if not opt.debug else 100
@@ -146,9 +119,8 @@ def main(opt):
             logging.info(f"Training data size: {len(train_ds)}")
             logging.info(f"Validation data size: {len(val_ds)}")
 
-            shuffle = False if opt.stream else True
             train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
-                num_workers=opt.worker_instances, shuffle=shuffle, drop_last=True)
+                num_workers=opt.worker_instances, shuffle=True, drop_last=True)
             val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
                 num_workers=opt.worker_instances, shuffle=False)
 
@@ -162,29 +134,8 @@ def main(opt):
                 logging.info(f"Epoch: {epoch} / {stop_epoch - 1}")
                 _ = train(epoch, model, optimizer, train_dl, loss_fn, writer, opt)
                 
-                if not isinstance(model, nn.DataParallel):
-                    state_dict = model.state_dict() 
-                else:
-                    state_dict = model.module.state_dict()
-
-                torch.save({
-                    'epoch': epoch,
-                    'model': state_dict,
-                    'optimizer': optimizer.state_dict(),
-                    'scheduler': scheduler.state_dict(),
-                    'best_metric': best_metric,
-                    'best_loss': best_loss,
-                }, f"{opt.model_folder}/{opt.model_last_tag}.pth")
-
-                if epoch % opt.save_interval == 0 and epoch != 0:
-                    torch.save({
-                        'epoch': epoch,
-                        'model': state_dict,
-                        'optimizer': optimizer.state_dict(),
-                        'scheduler': scheduler.state_dict(),
-                        'best_metric': best_metric,
-                        'best_loss': best_loss,
-                    }, f"{opt.model_folder}/{opt.epoch_model_tag}_{epoch}.pth")
+                # save model, optimizer, scheduler...
+                save_checkpoint(model, epoch, opt)
 
                 if epoch % opt.val_interval == 0:
                     # TODO: choose best model on mAP metric instead of total loss 

@@ -18,22 +18,15 @@ weight_decay: 1.0e-3
 resume: False
 model_folder: ./models
 best_model_tag: best_model
-epoch_model_tag: model_epoch
+model_tag: model_epoch
 model_last_tag: model_last
 model_path_to_load: ./models/best_model.pth
 
 # Replay instead of launching Blender
 replay: True
 
-# Launching Blender and stream data for learning
-stream: False
-
 # Folder to save visualizations for debugging
 debug_path: ./debug
-
-# 'stream' must be True for recording, can be replayed then
-record: False
-record_path: /mnt/data/20200916_TLess_visibility/tless
 
 # real @ /mnt/data/tless_test_real/test_primesense
 # photo realistic @ /mnt/data/tless_train_pbr

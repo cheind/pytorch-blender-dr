@@ -1,10 +1,11 @@
 import torch
 from torchvision.utils import make_grid
+from tqdm import tqdm
 
 from .utils import MetricMeter
-from .visu import render
+from .visu import render, render_class_distribution
 from .decode import decode, filter_dets
-from tqdm import tqdm
+from .coco_report import coco_eval, ap_values, draw_roc
 
 def add_dt(writer, tag, n_iter, output, batch, opt):
     dets = decode(output, opt.k)  # 1 x k x 6
@@ -51,6 +52,47 @@ def add_hms(writer, tag, n_iter, output, batch):
 
     writer.add_image(tag, hm, n_iter)
 
+def add_cdistr(writer, tag, n_iter, cdistr, opt):
+    """ Add class distribution bar plot to tensorboard writer """
+    fig = render_class_distribution(cdistr, opt)
+    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+
+def add_pr_curve(writer, tag, n_iter, prec, cids):
+    """ Add precision/recall line plot to tensorboard writer """
+    fig, ax = plt.subplots()
+    draw_roc(prec, cids, ax)
+    plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
+    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+
+def use_multiple_devices(model):
+    if torch.cuda.device_count() > 1 and torch.cuda.is_available():  
+        num_devices = torch.cuda.device_count()
+        logging.info(f"Available: {num_devices} GPUs!")
+        assert opt.batch_size % num_devices == 0, 'Batch size not divisible by #GPUs'
+        model = nn.DataParallel(model)  # Use all available devices
+    
+def save_checkpoint(model, count, opt, stream=False):
+    if not isinstance(model, nn.DataParallel):
+        state_dict = model.state_dict() 
+    else:
+        state_dict = model.module.state_dict()
+
+    save_dict = {
+        'model': state_dict,
+        'optimizer': optimizer.state_dict(),
+        'scheduler': scheduler.state_dict(),
+        'best_metric': best_metric,
+        'best_loss': best_loss,
+    }
+    save_dict['epoch' if stream else 'batch'] = count
+
+    torch.save(save_dict, 
+        f"{opt.model_folder}/{opt.model_last_tag}.pth")
+
+    if count % opt.save_interval == 0 and count != 0:
+        torch.save(save_dict, 
+            f"{opt.model_folder}/{opt.model_tag}_{count}.pth")
+
 def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.train()
@@ -61,7 +103,6 @@ def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
             batch = {k: v.to(device) for k, v in batch.items()}
 
             output = model(batch["image"])
-            #import pdb; pdb.set_trace()
             loss, loss_dict = loss_fn(output, batch)
 
             meter.update(loss_dict)
@@ -108,3 +149,62 @@ def eval(epoch, model, dataloader, loss_fn, writer, opt):
             add_hms(writer, "Val/HMS", i, output, batch)
 
     return meter
+
+def stream_train(meter, batch_count, model, optimizer, 
+    dataloader, loss_fn, writer, opt):
+    device = next(model.parameters()).device
+    model.train()
+
+    with tqdm(total=opt.val_interval) as pbar:
+        for i, batch in enumerate(dataloader):
+            if i == opt.val_interval:
+                break
+
+            batch = {k: v.to(device) for k, v in batch.items()}
+
+            output = model(batch["image"])
+            loss, loss_dict = loss_fn(output, batch)
+
+            meter.update(loss_dict)
+            meter.to_writer(writer, "Train", n_iter=batch_count + i)
+
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+
+            if i % opt.train_vis_interval == 0:
+                batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
+                output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
+                
+                add_dt(writer, "Train/DT", i, output, batch, opt)
+                add_gt(writer, "Train/GT", i, output, batch, opt)
+                add_hms(writer, "Train/HMS", i, output, batch)
+            pbar.set_postfix(loss=loss.item())
+            pbar.update()
+        pbar.close()
+
+@torch.no_grad()
+def stream_eval(meter, batch_count, model,  
+    dataloader, loss_fn, writer, opt):
+    device = next(model.parameters()).device
+    model.eval()
+
+    for i, batch in enumerate(dataloader):
+        if i == opt.val_len:
+            break
+
+        batch = {k: v.to(device) for k, v in batch.items()}
+
+        output = model(batch["image"])
+        _, loss_dict = loss_fn(output, batch)
+
+        meter.update(loss_dict)
+        meter.to_writer(writer, "Val", n_iter=batch_count + i)
+
+        if i % opt.val_vis_interval == 0:
+            batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
+            output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
+            
+            add_dt(writer, "Val/DT", i, output, batch, opt)
+            add_gt(writer, "Val/GT", i, output, batch, opt)
+            add_hms(writer, "Val/HMS", i, output, batch)

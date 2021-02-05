@@ -5,22 +5,8 @@ import numpy as np
 import logging
 import io
 
-# define rgb colors for bounding boxes
-# https://www.rapidtables.com/web/color/RGB_Color.html
-COLORS = [
-    [255, 102, 102],
-    [255, 178, 102],
-    [102, 255, 102],
-    [102, 255, 255],
-    [102, 102, 255],
-    [255, 102, 255],
-    [0, 102, 102],
-    [102, 51, 0],
-    [76, 0, 153],
-    [0, 0, 0],
-    [128, 128, 128],
-]
-COLORS = np.array(COLORS, dtype=np.float32) / 255
+from .constants import MAPPING, COLORS
+from .evaluation import _to_float
 
 def render(image, detections, opt, show=True, 
     save=False, path=None, denormalize=True, ret=False):
@@ -75,6 +61,46 @@ def render(image, detections, opt, show=True,
         return fig
     else:
         plt.close(fig)
+
+def render_class_distribution(cdistr: dict, opt):
+    """
+    Create bar plot of class distribution.
+    
+    - cls_distr: keys (=labels) from 0 - 29
+
+    note: original 1-30 but inside Blender we took
+    more natural indices from 0-29, we want to see the
+    actual class distribution with classes 0-5 used
+    in our experiments 
+    """
+    for old_cid in range(1, 31):  # 1 - 30
+        new_cid = MAPPING[old_cid]  # 0 - 5
+        cd[new_cid] += cdistr[old_cid - 1]  # 0 - 29
+    
+    # initialize bar plot
+    fig, ax = plt.subplots()
+    cd = [0 for _ in range(opt.num_classes)]  
+    bars = ax.bar(x=list(range(opt.num_classes)), 
+        height=cd, color=COLORS[:opt.num_classes])
+
+    total = sum(cd)
+
+    def autolabel(bars):
+        """
+        Attach a text label above each bar in bars, 
+        displaying its height.
+        """
+        for bar in barss:
+            height = bar.get_height()
+            ax.annotate(f'{_to_float(height)} / {int(height / total * 100)}%',
+                        xy=(bar.get_x() + bar.get_width() / 2, height),
+                        xytext=(0, 3),  # 3 points vertical offset
+                        textcoords="offset points",
+                        ha='center', va='bottom')
+    autolabel(bars)
+    fig.tight_layout()
+    fig.add_axes(ax)
+    return fig
 
 def iterate(dl, opt):
     DPI=96

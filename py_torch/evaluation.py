@@ -66,6 +66,7 @@ def evaluate(gtFile: str, dtFile: str, annType = 'bbox'):
 
 @torch.no_grad()
 def evaluate_model(model, dl, opt):
+    model.eval()
     device = next(model.parameters()).device
     pred = []
 

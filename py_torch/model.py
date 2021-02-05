@@ -381,9 +381,10 @@ class DLASeg(nn.Module):
         return ret
 
 
-def get_model(heads, head_conv=256, down_ratio=4):
+def get_model(heads, head_conv=256, down_ratio=4,
+    pretrained=True):
     model = DLASeg('dla34', heads,
-                   pretrained=True,
+                   pretrained=pretrained,
                    down_ratio=down_ratio,
                    head_conv=head_conv)
     return model
