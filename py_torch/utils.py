@@ -155,3 +155,30 @@ class Config:
     def __str__(self):
         return self.__repr__()
     
+class FileStream:
+
+    def __init__(self, filepath: str, parser=None):
+        self.filepath = filepath
+        self.file = None
+        self.buffer = io.StringIO()
+        self.parser = parser
+
+    def write(self, s):
+        self.buffer.write(s)  # redirect to buffer
+        sys.__stdout__.write(s)  # and print it to console
+
+    def __enter__(self):
+        # context manager
+        self.file = open(self.filepath, "w+")
+        sys.stdout = self
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        # context manager
+        if self.parser is not None:
+            output = self.parser(self.buffer.getvalue())
+        else:
+            output = self.buffer.getvalue()
+        self.file.write(output)
+        self.buffer.close()
+        self.file.close()
+        sys.stdout = sys.__stdout__

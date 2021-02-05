@@ -61,6 +61,7 @@ def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
             batch = {k: v.to(device) for k, v in batch.items()}
 
             output = model(batch["image"])
+            #import pdb; pdb.set_trace()
             loss, loss_dict = loss_fn(output, batch)
 
             meter.update(loss_dict)

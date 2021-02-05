@@ -76,7 +76,7 @@ class FocalLoss(nn.Module):
     def forward(self, out, target):
         """
         Modified focal loss. Runs faster and costs a little bit more memory.
-        The out parameter the network output which contains
+        The out parameter is the network output which contains
         the center point heat map predictions.
 
         Parameters
@@ -93,6 +93,7 @@ class FocalLoss(nn.Module):
         pos_mask = target.eq(1).float()
         neg_mask = target.lt(1).float()
 
+        #import pdb; pdb.set_trace()
         pos_weights = torch.pow(1 - out, self.alpha)
         neg_weights = (torch.pow(1 - target, self.beta)
                        * torch.pow(out, self.alpha))

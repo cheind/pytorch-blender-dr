@@ -1,33 +1,16 @@
 import albumentations as A
 import numpy as np 
+from typing import List
+import cv2
 
-from .main import MAPPING
+from .utils import generate_heatmap
+from .constants import MAPPING
 
-def item_filter(func, bbox_visibility_threshold):
-
-    def inner(item):
-        bboxes = item['bboxes']  # n x 4
-        cids = item['cids']  # n,
-        vis = item['visfracs']  # n,
-
-        # visibility filtering
-        mask = (vis > bbox_visibility_threshold)  # n,
-        item["bboxes"] = bboxes[mask]  # n' x 4
-        cids = cids[mask]  # n',
-
-        # remap the class ids to our group assignment
-        new_ids = np.array([MAPPING[old_id] for old_id in cids], dtype=cids.dtype)
-        item["cids"] = new_ids
-        item = func(item)  # call the decorated function
-        return item
-    
-    return inner
-
-class Transformation:
+class Transform:
 
     def __init__(self, opt, bbox_format='coco',
         augmentations: List = None, normalize=True,
-        resize_crop=False, bboxes=True):
+        resize_crop=False, bboxes=True, filter=False):
         super().__init__()
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
         self.num_classes = opt.num_classes  # num. of object classes
@@ -43,6 +26,7 @@ class Transformation:
         self.augmentations = augmentations
         self.bbox_format = bbox_format 
         self.bboxes = bboxes
+        self.filter = filter
 
         if opt.train:
             if augmentations is None:
@@ -91,7 +75,36 @@ class Transformation:
         self.transform_fn = A.Compose(transformations, 
             bbox_params=bbox_params)
 
-    def item_transform_train(item: dict):
+        if opt.train:
+            self.item_transform = self.item_transform_train
+        else:
+            self.item_transform = self.item_transform_test
+
+        if filter:
+            self.item_transform = self.item_filter(self.item_transform,
+                opt.bbox_visibility_threshold)
+
+    def item_filter(self, func, bbox_visibility_threshold):
+
+        def inner(item):
+            bboxes = item['bboxes']  # n x 4
+            cids = item['cids']  # n,
+            vis = item['visfracs']  # n,
+
+            # visibility filtering
+            mask = (vis > bbox_visibility_threshold)  # n,
+            item["bboxes"] = bboxes[mask]  # n' x 4
+            cids = cids[mask]  # n',
+
+            # remap the class ids to our group assignment
+            new_ids = np.array([MAPPING[old_id] for old_id in cids], dtype=cids.dtype)
+            item["cids"] = new_ids
+            item = func(item)  # call the decorated function
+            return item
+        
+        return inner
+
+    def item_transform_train(self, item: dict):
         """
         :param item: dictionary
             - image: h x w x 3
@@ -173,7 +186,7 @@ class Transformation:
 
         return item
 
-    def item_transform_test(item: dict):
+    def item_transform_test(self, item: dict):
         """
         :param item: dictionary
             - image: h x w x 3
@@ -193,7 +206,7 @@ class Transformation:
         cids = item["cids"]
         h, w = image.shape[:2]
 
-        transformed = self.transform_fn(image=image))
+        transformed = self.transform_fn(image=image)
         image = np.array(transformed["image"], dtype=np.float32)
         h, w = image.shape[:2]  # rescaled image
         shape_pp = np.array(image.shape[:2], dtype=np.float32)
@@ -214,13 +227,9 @@ class Transformation:
         return item
 
     def __call__(self, item):
-        if self.train:
-            return self.item_transform_train(item)
-        else:
-            return self.item_transform_test(item)
+        return self.item_transform(item)
 
-def convert_bbox_format(bboxes, source_fmt, target_fmt,
-    h, w):
+def convert_bbox_format(bboxes, source_fmt, target_fmt, h, w):
     # pascal_voc: [x_min, y_min, x_max, y_max]
     # albumentatons: normalized [x_min, y_min, x_max, y_max]
     # coco: [x_min, y_min, width, height]

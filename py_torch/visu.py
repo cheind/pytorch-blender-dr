@@ -76,7 +76,7 @@ def render(image, detections, opt, show=True,
     else:
         plt.close(fig)
 
-def iterate(dl):
+def iterate(dl, opt):
     DPI=96
     for step, item in enumerate(dl):
         img, bboxes, cids = item['image'], item['bboxes'], item['cids']
@@ -94,5 +94,5 @@ def iterate(dl):
             axs[i].set_axis_off()
             axs[i].set_xlim(0,W-1)
             axs[i].set_ylim(H-1,0)
-        fig.savefig(f'./data/output_{step}.png')
+        fig.savefig(f'{opt.debug_path}/{step}.png')
         plt.close(fig)

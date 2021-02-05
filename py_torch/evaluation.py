@@ -3,8 +3,15 @@ from pycocotools.cocoeval import COCOeval
 import json
 import logging
 import time
+import torch
+from tqdm import tqdm
 
-from .main import CATEGORIES
+from .constants import CATEGORIES
+from .utils import FileStream
+from .decode import decode, filter_dets
+
+def _to_float(x):
+    return float(f"{x:.2f}")
 
 def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids, 
     path):
@@ -36,7 +43,7 @@ def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids,
             annotations.append({
                 "image_id": int(image_id),
                 "category_id": int(category_id),
-                "bbox": bbox.tolist(),
+                "bbox": list(map(_to_float, bbox)),
                  # each annotation must have a unique id
                 "id": int(id),  
                 "iscrowd": 0,
@@ -56,6 +63,63 @@ def evaluate(gtFile: str, dtFile: str, annType = 'bbox'):
     cocoEval.evaluate()
     cocoEval.accumulate()
     cocoEval.summarize()
+
+@torch.no_grad()
+def evaluate_model(model, dl, opt):
+    device = next(model.parameters()).device
+    pred = []
+
+    for (i, batch) in tqdm(enumerate(dl), desc="Evaluation", total=len(dl)):
+        batch = {k: v.to(device) for k, v in batch.items()}
+
+        out = model(batch["image"])  # 1 x 3 x h x w
+        dets = decode(out, opt.k)  # 1 x k x 6
+        dets = filter_dets(dets, opt.model_score_threshold)  # 1 x k' x 6
+
+        image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
+        dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
+
+        shape_pp = batch["shape_pp"]  # 1 x 2
+        h_gt, w_gt = image_gt.size(1), image_gt.size(2)
+
+        # Pre padded image height and width
+        h_pp, w_pp = shape_pp[0]  
+        x_scale = w_gt / w_pp
+        y_scale = h_gt / h_pp
+
+        # Scale bboxes to match original image space
+        dets[..., 0] *= x_scale  # x
+        dets[..., 1] *= y_scale  # y
+        dets[..., 2] *= x_scale  # w
+        dets[..., 3] *= y_scale  # h
+
+        if opt.render_detections:
+            render(image_gt, dets, opt, show=False, save=True, 
+                path=f"{opt.detection_folder}/{i:05d}.png", 
+                denormalize=False)
+
+        # Create json results for AP evaluation
+        image_id = int(batch["image_id"])
+        dets = dets.squeeze(0).cpu().numpy()  # k' x 6
+
+        bboxes = dets[..., :4]  # k' x 4
+        scores = dets[..., 4]  # k',
+        cids = dets[..., 5]  # k',
+
+        for bbox, cid, score in zip(bboxes, cids, scores):
+            pred.append({
+                "image_id": image_id,
+                "category_id": int(cid),
+                "bbox": list(map(_to_float, bbox)),
+                "score": _to_float(score),
+            })
+        
+    # Save json results for evaluation
+    json.dump(pred, open(f"{opt.evaluation_folder}/pred.json", "w"))
+    # Save console output
+    with FileStream(f"{opt.evaluation_folder}/mAP.txt"):
+        evaluate(f"{opt.evaluation_folder}/gt.json", 
+            f"{opt.evaluation_folder}/pred.json")
 
 if __name__ == "__main__":
     gt = {

@@ -1,67 +1,69 @@
 from contextlib import ExitStack
-from albumentations import augmentations
+import albumentations as A
 import numpy as np
 import logging
-import os
-import sys
-import cv2
-from pathlib import Path
-import json
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
+import argparse
 
 # git clone https://github.com/cheind/pytorch-blender.git <DST>
 # pip install -e <DST>/pkg_pytorch
 from blendtorch import btt
 
-from .utils import Config, generate_heatmap
+# relative imports, call with -m option
+# >> python -m py_torch.main
+from .utils import Config
 from .train import train, eval
 from .loss import CenterLoss
 from .model import get_model
-from .decode import decode, filter_dets
-from .visu import render, iterate
-from .transform import Transformation, item_filter
-from .evaluation import create_gt_anns, evaluate
-
-GROUPS = [  # assign objects to groups (classes)
-    [1, 2, 3, 4],
-    [5, 6, 7, 8, 9],
-    [10, 11, 12,],
-    [13, 14, 15, 16, 17, 18],
-    [19, 20, 21, 22, 23, 24],
-    [25, 26, 27, 28, 29, 30],
-]
-NAMES = [f"{i}" for i in range(len(GROUPS))]
-CATEGORIES = [{"id": id, "name": name} for id, name in enumerate(NAMES)]
-# to map the 1 to 30 original classes to new classes of 0 to 5
-MAPPING = {old_cls_id: new_cls_id for new_cls_id, group in enumerate(GROUPS) 
-                                        for old_cls_id in group}
-            
-def _to_float(x):
-    return float(f"{x:.2f}")
+from .visu import iterate  # iterate over dataloader (debugging)
+from .transform import Transform
+from .evaluation import evaluate_model
+from .dataset import TLessDataset
 
 def main(opt):
-    if opt.train:
-        logging.info("Runnig script for training...")
-        augmentation = [
-            A.HueSaturationValue(hue_shift_limit=20, 
-                sat_shift_limit=30, val_shift_limit=20, p=0.5),
-            A.ChannelShuffle(p=0.5),
-            A.HorizontalFlip(p=0.2),
-        ])
-    else: 
-        logging.info("Runnig script for inference...")
-        augmentation = []
-        
-    transformation = Transformation(opt, augmentations=augmentation)
 
-    # TODO: stream, replay
+    def load_from_checkpoint(opt):
+        if opt.resume or not opt.train:
+            nonlocal model
+            logging.info(f'Load checkpoint from {opt.model_path_to_load}...')
+            checkpoint = torch.load(opt.model_path_to_load, 
+                map_location='cuda' if opt.use_cuda else 'cpu')
+            model.load_state_dict(checkpoint['model'])
+            if opt.train:
+                nonlocal optimizer, scheduler
+                optimizer.load_state_dict(checkpoint['optimizer'])
+                scheduler.load_state_dict(checkpoint['scheduler'])
+            start_epoch = checkpoint['epoch'] + 1         
+            best_metric = checkpoint['best_metric']
+            best_loss = checkpoint['best_loss']
+        
+            logging.info(f'Start epoch: {start_epoch}')
+            logging.info(f'Best loss: {best_loss}')
+            logging.info(f'Best metric: {best_metric}')
+        else: 
+            logging.info('Train with pretrained backbone...')
+            start_epoch = 0
+            best_metric = 0  # higher = better
+            best_loss = 1000  # lower = better
+
+    # Choose augmentations for training
+    augmentations = [
+        A.HueSaturationValue(hue_shift_limit=20, 
+            sat_shift_limit=30, val_shift_limit=20, p=0.5),
+        A.ChannelShuffle(p=0.5),
+        A.HorizontalFlip(p=0.2),
+    ] if opt.train else []
+    # Resize images to opt.h, opt.w in training
+    transformation = Transform(opt, augmentations=augmentations, 
+        filter=opt.stream or opt.replay, resize_crop=opt.train)
 
     with ExitStack() as es:
         if opt.stream:
+            raise NotImplementedError  # TODO
             logging.info('Stream data from Blender instance(s)...')
             # Launch Blender instance. 
             # Upon exit of this script all Blender instances will 
@@ -72,69 +74,69 @@ def main(opt):
                     script=f"{opt.scene}.blend.py",
                     num_instances=opt.blender_instances,
                     named_sockets=['DATA'],
-                    blend_path=opt.blend_path,
+                    blend_path=opt.blender_path,
                 )
             )
+            # does not support shuffle
             ds = btt.RemoteIterableDataset(
                 bl.launch_info.addresses['DATA'],
-                item_transform=item_filter(item_transform, 
-                    opt.bbox_visibility_threshold)
+                item_transform=transformation,
             )
-            # shuffle = False  # does not support shuffle
             ds.stream_length(4)
             if opt.record:
                 ds.enable_recording(opt.record_path)
+            #import pdb; pdb.set_trace()
         elif opt.replay:
             logging.info('Use data from Blender replay...')
-            ds = btt.FileDataset(opt.train_path, item_transform=item_filter(item_transform, 
-                opt.bbox_visibility_threshold))
-            # shuffle = True
+            ds = btt.FileDataset(
+                opt.train_path, 
+                item_transform=transformation,
+            )
         else:
-            logging.info('Use saved data from data folders...')
+            logging.info('Use BOP data...')
             ds = TLessDataset(opt, transformation)
 
         # head_name: num. of channels
         heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
         model = get_model(heads)
+
+        # export CUDA_VISIBLE_DEVICES=1,2,3 or 1 or 0,1
+        # Run cuda.py to see available GPUs or nvidia-smi
+        # Note: if CUDA_VISIBLE_DEVICES=1,2,3 then cuda device 0
+        # in pytorch refers to physical cuda device 1
+        device = torch.device('cuda' if torch.cuda.is_available() and opt.use_cuda else 'cpu')
+        logging.info(f'Using device: {device}')
         model.to(device)
         num_params = sum(p.numel() for p in model.parameters())
         print(f'Model with: {num_params/10**6:.2f}M number of parameters')
 
-        if opt.resume or not opt.train:
-            logging.info(f'Load checkpoint from {opt.model_path_to_load}...')
-            checkpoint = torch.load(opt.model_path_to_load)
-            model.load_state_dict(checkpoint['model'])
-            optimizer.load_state_dict(checkpoint['optimizer'])
-            scheduler.load_state_dict(checkpoint['scheduler'])
-            start_epoch = checkpoint['epoch'] +1 
-            best_metric = checkpoint['best_metric']
-            best_loss = checkpoint['best_loss']
+        load_from_checkpoint(opt)
 
-            logging.info(f'Start epoch: {start_epoch}')
-            logging.info(f'Best loss: {best_loss}')
-            logging.info(f'Best metric: {best_metric}')
+        if not opt.train:  
+            logging.info("Runnig script for inference...")
+            model.eval()
+            test_dl = data.DataLoader(ds, batch_size=1, 
+                num_workers=opt.worker_instances, shuffle=False)
+            evaluate_model(model, test_dl, opt)
         else:
-            logging.info('Train from scratch...')
-            start_epoch = 0
-            best_metric = 0  # higher = better
-            best_loss = 1000  # lower = better
-   
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-        if opt.train:
-            loss_fn = CenterLoss()
+            logging.info("Runnig script for training...")
+            model.train()
             optimizer = optim.Adam(model.parameters(), 
                 lr=opt.lr, weight_decay=opt.weight_decay)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                 step_size=opt.lr_step_size, gamma=0.2)
-
-            if torch.cuda.device_count() > 1:  # default use all GPUs
-                print("Use", torch.cuda.device_count(), "GPUs!")
-                model = nn.DataParallel(model)  # device_ids to select GPUs
-
-            num_samples = 1000  # len(ds) TODO
+            
+            if torch.cuda.device_count() > 1 and torch.cuda.is_available():  
+                num_devices = torch.cuda.device_count()
+                logging.info(f"Available: {num_devices} GPUs!")
+                assert opt.batch_size % num_devices == 0, 'Batch size not divisible by #GPUs'
+                model = nn.DataParallel(model)  # Use all available devices
+            
+            loss_fn = CenterLoss()
+            
+            num_samples = len(ds) if not opt.debug else 100
             logging.info(f"Number of samples: {num_samples}")
-            logging.info(f"Batch size: {batch_size}")
+            logging.info(f"Batch size: {opt.batch_size}")
 
             split = int(0.9 * num_samples)
             logging.info(f"Split data set at sample nr. {split}")
@@ -144,8 +146,9 @@ def main(opt):
             logging.info(f"Training data size: {len(train_ds)}")
             logging.info(f"Validation data size: {len(val_ds)}")
 
+            shuffle = False if opt.stream else True
             train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
-                num_workers=opt.worker_instances, shuffle=True)
+                num_workers=opt.worker_instances, shuffle=shuffle, drop_last=True)
             val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
                 num_workers=opt.worker_instances, shuffle=False)
 
@@ -153,8 +156,10 @@ def main(opt):
             # tensorboard --logdir=runs --bind_all
             writer = SummaryWriter()
 
-            for epoch in range(start_epoch, opt.num_epochs + start_epoch):
-                logging.info(f"Epoch: {epoch} / {start_epoch + opt.num_epochs}")
+            stop_epoch = start_epoch + opt.num_epochs
+            epochs = range(start_epoch, stop_epoch) if not opt.debug else (0,)
+            for epoch in epochs:
+                logging.info(f"Epoch: {epoch} / {stop_epoch - 1}")
                 _ = train(epoch, model, optimizer, train_dl, loss_fn, writer, opt)
                 
                 if not isinstance(model, nn.DataParallel):
@@ -199,16 +204,13 @@ def main(opt):
                         }, f"{opt.model_folder}/{opt.best_model_tag}.pth")
                 
                 scheduler.step()
-
-        else:
-            model.eval()
-            test_dl = data.DataLoader(ds, batch_size=1, 
-                num_workers=opt.worker_instances, shuffle=False)
-
-        
+            
 if __name__ == '__main__':
-    import logging
+    config_path = './configs'
     logging.basicConfig(level=logging.INFO)
-    opt = Config("./configs/config.txt")
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', default='config.txt')
+    args = parser.parse_args()
 
+    opt = Config(f'{config_path}/{args.config}')
     main(opt)

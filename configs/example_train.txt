@@ -4,14 +4,14 @@ blender_path: C:/Program Files/Blender Foundation/Blender 2.90
 blender_instances: 2
 worker_instances: 4
 
-train: False
+train: True
 debug: False
-use_cuda: False
+use_cuda: True
 
 num_epochs: 4
 batch_size: 16
 lr: 1.25e-4
-lr_step_size: 1
+lr_step_size: 10
 weight_decay: 1.0e-3
 
 # Resume training
@@ -23,7 +23,7 @@ model_last_tag: model_last
 model_path_to_load: ./models/best_model.pth
 
 # Replay instead of launching Blender
-replay: False
+replay: True
 
 # Launching Blender and stream data for learning
 stream: False

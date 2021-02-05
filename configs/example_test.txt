@@ -6,7 +6,7 @@ worker_instances: 4
 
 train: False
 debug: False
-use_cuda: False
+use_cuda: True
 
 num_epochs: 4
 batch_size: 16
@@ -44,7 +44,7 @@ train_path: /mnt/data/20200924_tless_cameranoise_matupdate/tless
 # for inference, BOP data, TLessDataset, set replay to False
 inference_path: /mnt/data/tless_test_real/test_primesense
 
-model_score_threshold: 0.3
+model_score_threshold: 0.1
 render_detections: False
 detection_folder: ./detection
 evaluation_folder: ./evaluation

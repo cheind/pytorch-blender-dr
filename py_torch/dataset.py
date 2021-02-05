@@ -1,23 +1,31 @@
 import json
 import yaml
 import numpy as np
-import sys
-import os
-from pytorch.utils import data
+from torch.utils import data
+from pathlib import Path
+import logging
+import cv2
 
-from .main import MAPPING
+from .evaluation import create_gt_anns
+from .constants import MAPPING
 
 class TLessDataset(data.Dataset):
 
     def __init__(self, opt, item_transform):
         if opt.train:
-            self.base_path = Path(opt.train_path)
+            self.basepath = Path(opt.train_path)
         else:
-            self.base_path = Path(opt.inference_path)
-        assert self.basepath.exists()
+            self.basepath = Path(opt.inference_path)
+        #import pdb; pdb.set_trace()
+        assert self.basepath.exists(), str(self.basepath)
 
         self.item_transform = item_transform
         self.opt = opt
+
+        # 000001, 000002,...
+        self.all_rgbpaths = []
+        self.all_bboxes = []
+        self.all_cids = []
 
         scenes = [f for f in self.basepath.iterdir() if f.is_dir()]
         for scenepath in scenes:
@@ -32,9 +40,9 @@ class TLessDataset(data.Dataset):
                 logging.info('Dataset loading OLD format')
                 rgbpaths, bboxes, cids = self._parse_old_format(scenepath)
                 
-            self.all_rgbpaths = rgbpaths
-            self.all_bboxes = bboxes
-            self.all_cids = cids
+            self.all_rgbpaths.extend(rgbpaths)
+            self.all_bboxes.extend(bboxes)
+            self.all_cids.extend(cids)
          
         # a unique id per image path
         self.img_ids = list(range(len(self.all_rgbpaths)))
