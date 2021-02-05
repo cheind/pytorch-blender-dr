@@ -34,7 +34,7 @@ python record.py --help
 ``` 
 for more options.
 
-## Training
+## Training and Evaluation
 
 Create a new Conda environment
 ```
@@ -43,14 +43,42 @@ conda activate icpr
 pip install -r requirements.txt
 ```
 
+Setup BlendTorch:
 ```
+Detailed instructions can be found at:
+https://github.com/cheind/pytorch-blender
+under 'Installation' in the readme.
+
 git clone https://github.com/cheind/pytorch-blender.git <DST>
 pip install -e <DST>/pkg_pytorch
-edit configs/config.txt
-python -m py_torch.main
-tensorboard --logdir runs --bind_all
-model in models (model_last.pth / model_best.pth)
-
 ```
-## Evaluation
-TODO
+
+How to run scripts:
+```
+Run the main script for training with:
+>> python -m py_torch.main --config example_train.txt
+Run the main script for mean average precision calculation with:
+>> python -m py_torch.main --config example_test.txt
+NOTE: Change train_path and inference_path in the example_train.txt
+and example_test.txt s.t. it matches your data location!
+
+The example configuration above will replay from existing 
+BlendTorch replay file(s) with a '.btr' extension. Thus, run
+the record.py script beforehand with:
+>> python record.py tless
+as stated above.
+
+We train and choose the best performing model only by training
+on BlendTorch generated data (~50k images) and evaluate the performance (mAP metric)
+with real world data taken by a primesense camera (~1000 images).
+
+Track training progress with tensorboard:
+tensorboard --logdir runs --bind_all
+
+During training models are stored in the 'models' folder
+as model_last.pth or model_best.pth!
+
+Train and evaluate multiple times with the 'ntimes.sh' script. It will use the
+settings from example_train.txt and example_test.txt for training and evaluation
+respectively.
+```
