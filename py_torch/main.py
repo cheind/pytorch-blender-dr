@@ -135,7 +135,19 @@ def main(opt):
                 _ = train(epoch, model, optimizer, train_dl, loss_fn, writer, opt)
                 
                 # save model, optimizer, scheduler...
-                save_checkpoint(model, epoch, opt)
+                if not isinstance(model, nn.DataParallel):
+                    state_dict = model.state_dict() 
+                else:
+                    state_dict = model.module.state_dict()
+
+                save_dict = {
+                    'model': state_dict,
+                    'optimizer': optimizer.state_dict(),
+                    'scheduler': scheduler.state_dict(),
+                    'best_metric': best_metric,
+                    'best_loss': best_loss,
+                }
+                save_checkpoint(save_dict, epoch, opt, stream=False)
 
                 if epoch % opt.val_interval == 0:
                     # TODO: choose best model on mAP metric instead of total loss 

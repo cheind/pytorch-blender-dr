@@ -71,12 +71,15 @@ def main(opt):
     # number of samples to produce 
     max_items = opt.batch_size * (opt.num_batches + 
         opt.val_len * int(opt.num_batches / opt.val_interval + 1)) 
-    logging.info(f'Samples: {max_items} (or {max_batches} batches)')
+    max_batches = max_items / opt.batch_size
+    logging.info(f'Total samples: {max_items} (or {max_batches} batches)')
+    logging.info(f"Number of total training batches: {opt.num_batches}")
+    logging.info(f"Batch size: {opt.batch_size}")
     
     # btt.RemoteIterableDataset does not support shuffle
     ds = btt.RemoteIterableDataset(
         data_addr,
-        max_items=max_items,
+        max_items=max_items, 
         item_transform=transformation,
     )
 
@@ -113,9 +116,6 @@ def main(opt):
     best_metric = 0  # higher = better
     best_loss = 1000  # lower = better
 
-    logging.info(f"Number of training batches: {opt.num_batches}")
-    logging.info(f"Batch size: {opt.batch_size}")
-
     logging.info('Open tensorboard to track trainings progress')
     # tensorboard --logdir=runs --bind_all
     writer = SummaryWriter()
@@ -123,27 +123,72 @@ def main(opt):
     image_id = 0    
     gt_ann_id = 0
 
+    train_meter = MetricMeter()
+    eval_meter = MetricMeter()               
+    
     logging.info(f'Start training with data stream(s) from Blender')
-    for batch_count in range(opt.num_batches):
-        
-    # save model, optimizer, scheduler...
-    save_checkpoint(model, epoch, opt, stream=True)         
+    while batch_count < max_batches:
+        logging.info(f'Progress: {batch_count}/{max_batches}')
 
-    # TODO: choose best model on mAP metric instead of total loss 
-     = eval(meter, batch_count, model, val_dl, loss_fn, writer, opt)
-    total_loss = meter.get_avg("total_loss")
-    logging.info(f'Evaluation loss: {total_loss}')
+        # train till opt.val_interval is reached
+        batch_count = stream_train(train_meter, batch_count, model, optimizer, 
+            dl, loss_fn, writer, opt)
+        train_meter.reset()
 
-    if total_loss <= best_loss:
-        best_loss = total_loss
-        torch.save({
-            'epoch': epoch,
+        save_dict = {
             'model': state_dict,
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(),
             'best_metric': best_metric,
             'best_loss': best_loss,
-        }, f"{opt.model_folder}/{opt.best_model_tag}.pth")
+        }
+
+        # save model, optimizer, scheduler... (regular checkpoints)
+        save_checkpoint(save_dict, count, opt, stream=True)
+        
+        # then perform a evaluation step for opt.val_len batches
+        batch_count = stream_eval(eval_meter, batch_count, model,  
+            dl, loss_fn, writer, opt)
+        
+        # save model, optimizer, scheduler... (best performing checkpoint)
+        save_best_performing_checkpoint(save_dict, best_metric, best_loss, 
+            eval_meter, count, opt)
+        eval_meter.reset()  
+
+     
+
+    
+
+    def save_best_performing_checkpoint(save_dict, best_metric, best_loss, 
+            eval_meter, count, opt, use_loss=False, use_metric=True, stream=False):
+        
+        total_loss = meter.get_avg("total_loss")
+        metric = meter.get_val('metric')
+        logging.info(f'Evaluation loss: {total_loss}')
+        logging.info(f'Evaluation metric: {metric}')
+
+        if not isinstance(model, nn.DataParallel):
+            state_dict = model.state_dict() 
+        else:
+            state_dict = model.module.state_dict()
+
+        
+        if total_loss <= best_loss and use_loss:
+        
+        if metric <= best_metric and use_loss:
+
+        
+        save_dict['batch' if stream else 'epoch'] = count
+            
+            best_loss = total_loss
+            torch.save({
+                'batch': batch_count,
+                'model': state_dict,
+                'optimizer': optimizer.state_dict(),
+                'scheduler': scheduler.state_dict(),
+                'best_metric': best_metric,
+                'best_loss': best_loss,
+            }, f"{opt.model_folder}/{opt.best_model_tag}.pth")
 
 scheduler.step()
 

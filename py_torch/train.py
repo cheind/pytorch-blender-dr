@@ -71,20 +71,8 @@ def use_multiple_devices(model):
         assert opt.batch_size % num_devices == 0, 'Batch size not divisible by #GPUs'
         model = nn.DataParallel(model)  # Use all available devices
     
-def save_checkpoint(model, count, opt, stream=False):
-    if not isinstance(model, nn.DataParallel):
-        state_dict = model.state_dict() 
-    else:
-        state_dict = model.module.state_dict()
-
-    save_dict = {
-        'model': state_dict,
-        'optimizer': optimizer.state_dict(),
-        'scheduler': scheduler.state_dict(),
-        'best_metric': best_metric,
-        'best_loss': best_loss,
-    }
-    save_dict['epoch' if stream else 'batch'] = count
+def save_checkpoint(save_dict, count, opt, stream=False):
+    save_dict['batch' if stream else 'epoch'] = count
 
     torch.save(save_dict, 
         f"{opt.model_folder}/{opt.model_last_tag}.pth")
@@ -92,6 +80,8 @@ def save_checkpoint(model, count, opt, stream=False):
     if count % opt.save_interval == 0 and count != 0:
         torch.save(save_dict, 
             f"{opt.model_folder}/{opt.model_tag}_{count}.pth")
+
+k
 
 def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
     device = next(model.parameters()).device
@@ -182,6 +172,8 @@ def stream_train(meter, batch_count, model, optimizer,
             pbar.set_postfix(loss=loss.item())
             pbar.update()
         pbar.close()
+    
+    return batch_count + opt.val_interval
 
 @torch.no_grad()
 def stream_eval(meter, batch_count, model,  
@@ -208,3 +200,5 @@ def stream_eval(meter, batch_count, model,
             add_dt(writer, "Val/DT", i, output, batch, opt)
             add_gt(writer, "Val/GT", i, output, batch, opt)
             add_hms(writer, "Val/HMS", i, output, batch)
+    
+    return batch_count + opt.val_len

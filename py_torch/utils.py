@@ -96,6 +96,10 @@ class MetricMeter:
                 v = v.item()
             self.meters[k].update(v)
 
+    def reset(self):  # to clear history for average calculation
+        for meter in self.meters.values():  # each of type AvarageMeter
+            meter.reset()
+
     def to_writer(self, writer, tag, n_iter):
         for name, meter in self.meters.items():
             writer.add_scalar(f"{tag}/{name}", meter.val, n_iter)
