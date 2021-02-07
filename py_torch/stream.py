@@ -1,5 +1,6 @@
 from contextlib import ExitStack
 import albumentations as A
+from blendtorch.btt import constants
 import numpy as np
 import logging
 import torch
@@ -16,16 +17,18 @@ from blendtorch import btt
 # relative imports, call with -m option
 # >> python -m py_torch.stream
 from .utils import Config
-from .train import (stream_train, stream_eval, 
-    use_multiple_devices, save_checkpoint)
+from .train import (stream_train, stream_eval, add_cdistr,
+    use_multiple_devices, save_checkpoint, save_best_performing_checkpoint)
 from .loss import CenterLoss
 from .model import get_model
 from .visu import iterate  # iterate over dataloader (debugging)
 from .transform import Transform
+from .constants import GROUPS
 
 def main(opt):
 
     if opt.debug:
+        logging.basicConfig(level=logging.DEBUG)
         opt.num_batches = 128
         opt.loss_threshold = 7.0
         opt.max_level_len = 32
@@ -51,10 +54,10 @@ def main(opt):
     # start with uniform class distribution 1-30 classes
     # and will later update the distribution to 
     # populate the scene with focus of objects we classified weakly
-    cls_distr = {k:1 for k in range(30)}  # 1-30 -> 0-29
+    cdistr = {k:1 for k in range(30)}  # 1-30 -> 0-29
 
     for remote in remotes:
-        remote.send(num_objects=num_objects, cdistr=cdistr)
+        remote.send(num_objects=opt.num_objects, cdistr=cdistr)
 
     # Choose augmentations for training
     augmentations = [
@@ -120,22 +123,28 @@ def main(opt):
     # tensorboard --logdir=runs --bind_all
     writer = SummaryWriter()
 
-    image_id = 0    
-    gt_ann_id = 0
-
     train_meter = MetricMeter()
     eval_meter = MetricMeter()               
+
+    steps_since_adjustment = 0
     
     logging.info(f'Start training with data stream(s) from Blender')
     while batch_count < max_batches:
         logging.info(f'Progress: {batch_count}/{max_batches}')
 
-        # train till opt.val_interval is reached
+        # train till opt.val_interval batches are processed
         batch_count = stream_train(train_meter, batch_count, model, optimizer, 
             dl, loss_fn, writer, opt)
         train_meter.reset()
+        scheduler.step()
+
+        if not isinstance(model, nn.DataParallel):
+            state_dict = model.state_dict() 
+        else:
+            state_dict = model.module.state_dict()
 
         save_dict = {
+            'batch': batch_count,
             'model': state_dict,
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(),
@@ -144,55 +153,21 @@ def main(opt):
         }
 
         # save model, optimizer, scheduler... (regular checkpoints)
-        save_checkpoint(save_dict, count, opt, stream=True)
+        save_checkpoint(save_dict, batch_count, opt)
         
-        # then perform a evaluation step for opt.val_len batches
-        batch_count = stream_eval(eval_meter, batch_count, model,  
+        # perform a evaluation step for opt.val_len batches
+        batch_count, prec = stream_eval(eval_meter, batch_count, model,  
             dl, loss_fn, writer, opt)
         
         # save model, optimizer, scheduler... (best performing checkpoint)
-        save_best_performing_checkpoint(save_dict, best_metric, best_loss, 
-            eval_meter, count, opt)
-        eval_meter.reset()  
+        best_metric, best_loss = save_best_performing_checkpoint(save_dict, best_metric, 
+            best_loss, eval_meter, opt, use_loss=False, use_metric=True)
+        eval_meter.reset()
 
-     
-
-    
-
-    def save_best_performing_checkpoint(save_dict, best_metric, best_loss, 
-            eval_meter, count, opt, use_loss=False, use_metric=True, stream=False):
-        
-        total_loss = meter.get_avg("total_loss")
-        metric = meter.get_val('metric')
-        logging.info(f'Evaluation loss: {total_loss}')
-        logging.info(f'Evaluation metric: {metric}')
-
-        if not isinstance(model, nn.DataParallel):
-            state_dict = model.state_dict() 
-        else:
-            state_dict = model.module.state_dict()
-
-        
-        if total_loss <= best_loss and use_loss:
-        
-        if metric <= best_metric and use_loss:
-
-        
-        save_dict['batch' if stream else 'epoch'] = count
-            
-            best_loss = total_loss
-            torch.save({
-                'batch': batch_count,
-                'model': state_dict,
-                'optimizer': optimizer.state_dict(),
-                'scheduler': scheduler.state_dict(),
-                'best_metric': best_metric,
-                'best_loss': best_loss,
-            }, f"{opt.model_folder}/{opt.best_model_tag}.pth")
-
-scheduler.step()
-
-
+        steps_since_adjustment += 1
+        # increase or decrease difficulty by stream adjustment
+        steps_since_adjustment = adjust_stream(loss, prec, cdistr, 
+            steps_since_adjustment, batch_count, remotes, opt)
 
 if __name__ == '__main__':
     config_path = './configs'

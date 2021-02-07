@@ -113,16 +113,17 @@ class Transform:
 
         :return: dictionary
             - image: 3 x 512 x 512
+            - bboxes: n x 4; [[x, y, width, height], ...]
             - cpt_hm: 1 x 128 x 128 # num_classes x 128 x 128
             - cpt_off: n_max x 2 low resolution offset - [0, 1)
             - cpt_ind: n_max, low resolution indices - [0, 128^2)
             - cpt_mask: n_max,
             - wh: n_max x 2, low resolution width, height - [0, 128], [0, 128]
-            - cls_id: n_max,
+            - cids: n_max,
         """
         image = item["image"]  # h x w x 3
         bboxes = item['bboxes']  # n x 4
-        cids = item["cids"]  # n,
+        cids_old = item["cids"]  # n,
         h, w = image.shape[:2]
 
         bbox_labels = np.arange(len(bboxes), dtype=np.float32)  # n,
@@ -131,7 +132,7 @@ class Transform:
         image = np.array(transformed["image"], dtype=np.float32)
         image = image.transpose((2, 0, 1))  # 3 x h x w
         bboxes = np.array(transformed["bboxes"], dtype=np.float32).reshape(-1, 5)
-        
+
         len_valid = len(bboxes)  # bboxes can be dropped
 
         # to be batched we have to bring everything to the same shape
@@ -147,9 +148,9 @@ class Transform:
         wh = np.zeros((self.n_max, 2), dtype=np.float32)
         wh[:len_valid, :] = bboxes[:, 2:-1] / self.down_ratio
 
-        cls_id = np.zeros((self.n_max,), dtype=np.uint8)
+        cids = np.zeros((self.n_max,), dtype=np.uint8)
         # the bbox labels help to reassign the correct classes
-        cls_id[:len_valid] = cids[bboxes[:, -1].astype(np.int32)]
+        cids[:len_valid] = cids_old[bboxes[:, -1].astype(np.int32)]
 
         # LOW RESOLUTION dimensions
         hl, wl = int(self.h / self.down_ratio), int(self.w / self.down_ratio)
@@ -168,7 +169,7 @@ class Transform:
         cpt_hms = []
         valid_cpt = cpt[cpt_mask.astype(np.bool)]  # n_valid x 2
         for i in range(self.num_classes):
-            mask = (cls_id[:len_valid] == i)  # n_valid,
+            mask = (cids[:len_valid] == i)  # n_valid,
             xy = valid_cpt[mask]  # n x 2, valid entries for each class
             cpt_hms.append(generate_heatmap((hl, wl), xy))  # each 1 x hl x wl
         
@@ -176,12 +177,13 @@ class Transform:
 
         item = {
             "image": image,
+            "bboxes": bboxes[..., :4],
             "cpt_hm": cpt_hm,
             "cpt_off": cpt_off,
             "cpt_ind": cpt_ind,
             "cpt_mask": cpt_mask,
             "wh": wh,
-            "cls_id": cls_id,
+            "cids": cids,
         }
 
         return item

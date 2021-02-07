@@ -1,8 +1,8 @@
 launch_info_file: ./launch_info.json
 worker_instances: 4
 
-debug: False
-use_cuda: False
+debug: True
+use_cuda: True
 pretrained: True
 
 # instead of num_epochs, num_batches is the amount of batches used to train
@@ -15,9 +15,8 @@ weight_decay: 1.0e-3
 
 # increase difficulty when trainings loss is below threshold
 loss_threshold: 3.0
-# if difficulty level is too high to learn something the loss won't
-# be able to go below the threshold even after 'max_level_len'
-max_level_len: 128
+# decrease difficulty if too high
+max_train_step: 3
 
 # assume difficulty depending on number and types of objects 
 # in the scene, class distribution initially uniform  
@@ -27,6 +26,11 @@ num_objects = 5
 # define how difficulty levels are increased or decreased
 # constraint: num_objects <= n_max 
 objects_step: 2
+
+# we start with a class distribution of equal weights
+# and adjust the class distribution to favor weakest classes
+# thus increasing difficulty (else we use uniform distribution) 
+distribution_step: 1 
 
 # in 'units' of batches
 # amount of training batches after which evaluation step is performed
@@ -58,7 +62,8 @@ model_score_threshold: 0.3
 render_detections: False
 detection_folder: ./detection
 evaluation_folder: ./evaluation
-k: 20
+# use top-k scores for detection
+k: 25
 
 bbox_visibility_threshold: 0.30
 down_ratio: 4

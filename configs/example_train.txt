@@ -41,7 +41,8 @@ model_score_threshold: 0.3
 render_detections: False
 detection_folder: ./detection
 evaluation_folder: ./evaluation
-k: 20
+# use top-k scores for detection
+k: 25
 
 bbox_visibility_threshold: 0.30
 down_ratio: 4

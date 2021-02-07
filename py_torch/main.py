@@ -49,6 +49,8 @@ def main(opt):
             start_epoch = 0
             best_metric = 0  # higher = better
             best_loss = 1000  # lower = better
+        
+        return start_epoch, best_metric, best_loss
 
     # Choose augmentations for training
     augmentations = [
@@ -94,7 +96,7 @@ def main(opt):
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                 step_size=opt.lr_step_size, gamma=0.2)
         
-        load_from_checkpoint(opt)
+        start_epoch, best_metric, best_loss = load_from_checkpoint(opt)
 
         if not opt.train:  
             logging.info("Runnig script for inference...")
@@ -134,38 +136,31 @@ def main(opt):
                 logging.info(f"Epoch: {epoch} / {stop_epoch - 1}")
                 _ = train(epoch, model, optimizer, train_dl, loss_fn, writer, opt)
                 
-                # save model, optimizer, scheduler...
                 if not isinstance(model, nn.DataParallel):
                     state_dict = model.state_dict() 
                 else:
                     state_dict = model.module.state_dict()
 
                 save_dict = {
+                    'epoch': epoch,
                     'model': state_dict,
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
                     'best_metric': best_metric,
                     'best_loss': best_loss,
                 }
-                save_checkpoint(save_dict, epoch, opt, stream=False)
+                # save model, optimizer, scheduler... (regular checkpoints)
+                save_checkpoint(save_dict, epoch, opt)
 
                 if epoch % opt.val_interval == 0:
                     # TODO: choose best model on mAP metric instead of total loss 
-                    meter = eval(epoch, model, val_dl, loss_fn, writer, opt)
-                    total_loss = meter.get_avg("total_loss")
-                    logging.info(f'Evaluation loss: {total_loss}')
+                    eval_meter = eval(epoch, model, val_dl, loss_fn, writer, opt)
+                    
+                    # save model, optimizer, scheduler... (best performing checkpoint)
+                    best_metric, best_loss = save_best_performing_checkpoint(save_dict, 
+                        best_metric, best_loss, eval_meter, opt, 
+                        use_loss=True, use_metric=False)
 
-                    if total_loss <= best_loss:
-                        best_loss = total_loss
-                        torch.save({
-                            'epoch': epoch,
-                            'model': state_dict,
-                            'optimizer': optimizer.state_dict(),
-                            'scheduler': scheduler.state_dict(),
-                            'best_metric': best_metric,
-                            'best_loss': best_loss,
-                        }, f"{opt.model_folder}/{opt.best_model_tag}.pth")
-                
                 scheduler.step()
             
 if __name__ == '__main__':
