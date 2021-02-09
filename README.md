@@ -72,9 +72,6 @@ We train and choose the best performing model only by training
 on BlendTorch generated data (~50k images) and evaluate the performance (mAP metric)
 with real world data taken by a primesense camera (~1000 images).
 
-Track training progress with tensorboard:
-tensorboard --logdir runs --bind_all
-
 During training models are stored in the 'models' folder
 as model_last.pth or model_best.pth!
 
@@ -87,3 +84,23 @@ by running the 'coco_report.py' file:
 >> python -m py_torch.coco_report './evaluation'
 where './evaluation' is the path to gt.json and pred.json (or multiple pred_*.json) file.
 ```
+Track/Visualize training progress with tensorboard:
+```
+tensorboard --logdir runs --bind_all
+```
+
+Augmented BlendTorch image with ground truth and prediction annotations: 
+<p align="center">
+  <img src="etc/tensorboard/training_gt.png" width="250">
+  <img src="etc/tensorboard/training.png" width="250">
+</p>
+
+Precision/Recall curves over single classes:
+<p align="center">
+  <img src="etc/tensorboard/pr_curves.png" width="500">
+</p>
+
+CenterNet's dense prediction output heatmaps (prediction, ground truth):
+<p align="center">
+  <img src="etc/tensorboard/heatmaps.png" width="500">
+</p>
