@@ -81,4 +81,9 @@ as model_last.pth or model_best.pth!
 Train and evaluate multiple times with the 'ntimes.sh' script. It will use the
 settings from example_train.txt and example_test.txt for training and evaluation
 respectively.
+
+Get detailed mAP summary report over single or multiple trainings runs (ntimes.sh)
+by running the 'coco_report.py' file:
+>> python -m py_torch.coco_report './evaluation'
+where './evaluation' is the path to gt.json and pred.json (or multiple pred_*.json) file.
 ```
