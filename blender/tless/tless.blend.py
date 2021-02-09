@@ -41,12 +41,10 @@ def main():
         )
         cam.look_at(look_at=cfg['camera.lookat'], look_from=lfrom)
 
-    
     def pre_anim(cam):
         nonlocal objs, occs        
         objs, occs = scene.create_scene(pre_gen_data, cfg)
         randomize_cam(cam)
-
         
     def post_frame(off, pub, anim, cam, pre_gen_data):
         if anim.frameid == 2: 

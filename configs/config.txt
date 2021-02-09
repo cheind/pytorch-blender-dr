@@ -1,21 +1,19 @@
-# Common path for .blend and .blend.py files without extension
-scene: blender/tless
-blender_path: C:/Program Files/Blender Foundation/Blender 2.90
-blender_instances: 2
 worker_instances: 4
 
-train: False
+train: True
 debug: False
-use_cuda: False
+use_cuda: True
 
 num_epochs: 4
 batch_size: 16
-lr: 1.25e-4
-lr_step_size: 10
-weight_decay: 1.0e-3
+lr: 1.25e-3
+lr_step_size: 1
+weight_decay: 0
+use_loss: True
+use_metric: True
 
 # Resume training
-resume: False
+resume: True
 model_folder: ./models
 best_model_tag: best_model
 model_tag: model_epoch
@@ -23,7 +21,7 @@ model_last_tag: model_last
 model_path_to_load: ./models/best_model.pth
 
 # Replay instead of launching Blender
-replay: False
+replay: True
 
 # Folder to save visualizations for debugging
 debug_path: ./debug
@@ -44,7 +42,7 @@ evaluation_folder: ./evaluation
 # use top-k scores for detection
 k: 25
 
-bbox_visibility_threshold: 0.30
+bbox_visibility_threshold: 0.20
 down_ratio: 4
 mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]

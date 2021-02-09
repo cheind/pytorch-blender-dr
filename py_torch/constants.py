@@ -1,3 +1,5 @@
+import numpy as np
+
 GROUPS = [  # assign objects to groups (classes)
     [1, 2, 3, 4],
     [5, 6, 7, 8, 9],

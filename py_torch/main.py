@@ -16,12 +16,15 @@ from blendtorch import btt
 # relative imports, call with -m option
 # >> python -m py_torch.main
 from .utils import Config
-from .train import train, eval, use_multiple_devices
+from .train import (train, eval, use_multiple_devices, 
+    save_checkpoint)
 from .loss import CenterLoss
 from .model import get_model
 from .visu import iterate  # iterate over dataloader (debugging)
 from .transform import Transform
 from .evaluation import evaluate_model
+from .utils import MetricMeter
+from .coco_report import ap_values
 from .dataset import TLessDataset
 
 def main(opt):
@@ -37,9 +40,10 @@ def main(opt):
                 nonlocal optimizer, scheduler
                 optimizer.load_state_dict(checkpoint['optimizer'])
                 scheduler.load_state_dict(checkpoint['scheduler'])
-            start_epoch = checkpoint['epoch'] + 1         
-            best_metric = checkpoint['best_metric']
-            best_loss = checkpoint['best_loss']
+
+            start_epoch = checkpoint.get('epoch', -1) + 1         
+            best_metric = checkpoint.get('best_metric', 0)
+            best_loss = checkpoint.get('best_loss', 1000)
         
             logging.info(f'Start epoch: {start_epoch}')
             logging.info(f'Best loss: {best_loss}')
@@ -100,16 +104,18 @@ def main(opt):
 
         if not opt.train:  
             logging.info("Runnig script for inference...")
+            if opt.debug:  # sanity check on subset
+                ds = data.Subset(ds, indices=list(range(min(100, len(ds)))))
             test_dl = data.DataLoader(ds, batch_size=1, 
                 num_workers=opt.worker_instances, shuffle=False)
             evaluate_model(model, test_dl, opt)
         else:
             logging.info("Runnig script for training...")       
             
-            use_multiple_devices(model)
+            use_multiple_devices(model, opt)
             loss_fn = CenterLoss()
             
-            num_samples = len(ds) if not opt.debug else 100
+            num_samples = len(ds) if not opt.debug else min(100, len(ds))
             logging.info(f"Number of samples: {num_samples}")
             logging.info(f"Batch size: {opt.batch_size}")
 
@@ -130,39 +136,37 @@ def main(opt):
             # tensorboard --logdir=runs --bind_all
             writer = SummaryWriter()
 
-            stop_epoch = start_epoch + opt.num_epochs
-            epochs = range(start_epoch, stop_epoch) if not opt.debug else (0,)
-            for epoch in epochs:
-                logging.info(f"Epoch: {epoch} / {stop_epoch - 1}")
-                _ = train(epoch, model, optimizer, train_dl, loss_fn, writer, opt)
+            train_meter = MetricMeter()
+            eval_meter = MetricMeter()     
+
+            for epoch in range(start_epoch, start_epoch + opt.num_epochs):
+                logging.info(f"Epoch: {epoch} / {start_epoch + opt.num_epochs - 1}")
+                train(train_meter, epoch, model, optimizer, 
+                    train_dl, loss_fn, writer, opt)
+                scheduler.step()
+
+                prec = eval(eval_meter, epoch, model, val_dl, loss_fn, writer, opt)
                 
                 if not isinstance(model, nn.DataParallel):
                     state_dict = model.state_dict() 
                 else:
                     state_dict = model.module.state_dict()
-
                 save_dict = {
                     'epoch': epoch,
                     'model': state_dict,
                     'optimizer': optimizer.state_dict(),
                     'scheduler': scheduler.state_dict(),
-                    'best_metric': best_metric,
-                    'best_loss': best_loss,
                 }
-                # save model, optimizer, scheduler... (regular checkpoints)
-                save_checkpoint(save_dict, epoch, opt)
 
-                if epoch % opt.val_interval == 0:
-                    # TODO: choose best model on mAP metric instead of total loss 
-                    eval_meter = eval(epoch, model, val_dl, loss_fn, writer, opt)
-                    
-                    # save model, optimizer, scheduler... (best performing checkpoint)
-                    best_metric, best_loss = save_best_performing_checkpoint(save_dict, 
-                        best_metric, best_loss, eval_meter, opt, 
-                        use_loss=True, use_metric=False)
+                loss = eval_meter.get_avg('total_loss')
+                metric = ap_values(prec).mean()  # mAP
+                # set x-axis of metric tracking to same as loss for better graph comparison
+                writer.add_scalar('Val/metric', metric, epoch * len(val_dl))
 
-                scheduler.step()
-            
+                # save model, optimizer, scheduler... 
+                best_metric, best_loss = save_checkpoint(save_dict, 
+                    epoch, metric, loss, best_metric, best_loss, opt)
+
 if __name__ == '__main__':
     config_path = './configs'
     logging.basicConfig(level=logging.INFO)
@@ -171,4 +175,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     opt = Config(f'{config_path}/{args.config}')
+
+    if opt.debug:
+        opt.model_score_threshold = 0.1
+        opt.num_epochs = 1
+        opt.train_vis_interval = 1
+        opt.val_vis_interval = 1
+
     main(opt)

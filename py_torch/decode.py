@@ -162,12 +162,11 @@ def filter_dets(dets, thres):
     """
     Parameters
     ----------
-    dets: b x k x 6
+    dets: 1 x k x 6
     thres: scalar, in [0, 1]
     """
-    b = dets.size(0)
-    scores = dets[..., 4]  # b x k
+    scores = dets[..., 4]  # 1 x k
     
-    mask = scores >= thres  # b x k
-    filtered_dets = dets[mask]  # b * k_filtered x 6
-    return filtered_dets.view(b, -1, 6)
+    mask = scores >= thres  # 1 x k
+    filtered_dets = dets[mask]  # k' x 6
+    return filtered_dets.view(1, -1, 6)

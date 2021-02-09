@@ -1,21 +1,24 @@
 {
-    "camera.num_images": 4,
+    "camera.num_images": 8,
+    "camera.nradius": 2,
     "camera.radius_range": [
         8,
         10
     ],
+    "camera.ntheta": 2,
     "camera.theta_range": [
         0,
         0.7853981633974483
     ],
+    "camera.nphi": 2,
     "camera.lookat": [
         0.0,
         0.0,
         0.0
     ],
     "scene.num_objects": 10,
+    "scene.cdistr": null,
     "scene.prob_occluder": 0.5,
-    "scene.object_cls_prob": null,
     "scene.object_intensity_range": [
         0.1,
         1

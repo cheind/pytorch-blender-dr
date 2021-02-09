@@ -18,28 +18,16 @@ from blendtorch import btt
 # >> python -m py_torch.stream
 from .utils import Config
 from .train import (stream_train, stream_eval, add_cdistr,
-    use_multiple_devices, save_checkpoint, save_best_performing_checkpoint)
+    use_multiple_devices, save_checkpoint)
 from .loss import CenterLoss
+from .utils import MetricMeter
 from .model import get_model
 from .visu import iterate  # iterate over dataloader (debugging)
 from .transform import Transform
+from .coco_report import ap_values
 from .constants import GROUPS
 
 def main(opt):
-
-    if opt.debug:
-        logging.basicConfig(level=logging.DEBUG)
-        opt.num_batches = 128
-        opt.loss_threshold = 7.0
-        opt.max_level_len = 32
-        opt.num_objects = 7 
-        opt.objects_step = 1
-        opt.val_interval = 64
-        opt.val_len = 16 
-        opt.save_interval = 128 
-        opt.train_vis_interval = 32
-        opt.val_vis_interval = 8 
-
     launch_info = btt.LaunchInfo.load_json(opt.launch_info)
     data_addr = launch_info.addresses['DATA']
     # CTRL is a list of addresses for establishing connection
@@ -129,45 +117,41 @@ def main(opt):
     steps_since_adjustment = 0
     
     logging.info(f'Start training with data stream(s) from Blender')
-    while batch_count < max_batches:
-        logging.info(f'Progress: {batch_count}/{max_batches}')
+    while count < max_batches:
+        logging.info(f'Progress: {count}/{max_batches} (batches)')
 
         # train till opt.val_interval batches are processed
-        batch_count = stream_train(train_meter, batch_count, model, optimizer, 
+        count = stream_train(train_meter, count, model, optimizer, 
             dl, loss_fn, writer, opt)
-        train_meter.reset()
         scheduler.step()
+
+        # perform a evaluation step for opt.val_len batches
+        count, prec = stream_eval(eval_meter, count, model,  
+            dl, loss_fn, writer, opt)
 
         if not isinstance(model, nn.DataParallel):
             state_dict = model.state_dict() 
         else:
             state_dict = model.module.state_dict()
-
         save_dict = {
-            'batch': batch_count,
+            'count': count,
             'model': state_dict,
             'optimizer': optimizer.state_dict(),
             'scheduler': scheduler.state_dict(),
-            'best_metric': best_metric,
-            'best_loss': best_loss,
         }
 
-        # save model, optimizer, scheduler... (regular checkpoints)
-        save_checkpoint(save_dict, batch_count, opt)
-        
-        # perform a evaluation step for opt.val_len batches
-        batch_count, prec = stream_eval(eval_meter, batch_count, model,  
-            dl, loss_fn, writer, opt)
-        
-        # save model, optimizer, scheduler... (best performing checkpoint)
-        best_metric, best_loss = save_best_performing_checkpoint(save_dict, best_metric, 
-            best_loss, eval_meter, opt, use_loss=False, use_metric=True)
-        eval_meter.reset()
+        loss = eval_meter.get_avg('total_loss')
+        metric = ap_values(prec).mean()  # mAP
+        writer.add_scalar('Val/Metric', metric, count)
+
+        # save model, optimizer, scheduler...
+        best_metric, best_loss = save_checkpoint(save_dict, 
+            count, metric, loss, best_metric, best_loss, opt)
 
         steps_since_adjustment += 1
         # increase or decrease difficulty by stream adjustment
         steps_since_adjustment = adjust_stream(loss, prec, cdistr, 
-            steps_since_adjustment, batch_count, remotes, opt)
+            steps_since_adjustment, count, remotes, opt)
 
 if __name__ == '__main__':
     config_path = './configs'
@@ -177,4 +161,17 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     opt = Config(f'{config_path}/{args.config}')
+
+    if opt.debug:
+        opt.num_batches = 128
+        opt.loss_threshold = 7.0
+        opt.max_level_len = 32
+        opt.num_objects = 7 
+        opt.objects_step = 1
+        opt.val_interval = 64
+        opt.val_len = 16 
+        opt.save_interval = 128 
+        opt.train_vis_interval = 32
+        opt.val_vis_interval = 8 
+
     main(opt)

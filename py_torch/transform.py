@@ -175,9 +175,13 @@ class Transform:
         
         cpt_hm = np.concatenate(cpt_hms, axis=0) 
 
+        # same shape for default collate_fn
+        bboxes_ = np.zeros((self.n_max, 4))
+        bboxes_[:len_valid, :] = bboxes[:, :4]
+        
         item = {
             "image": image,
-            "bboxes": bboxes[..., :4],
+            "bboxes": bboxes_,
             "cpt_hm": cpt_hm,
             "cpt_off": cpt_off,
             "cpt_ind": cpt_ind,

@@ -1,0 +1,18 @@
+{
+	"scene": "./blender/tless/tless.blend",
+    "script": "./blender/tless/tless_stream.blend.py",
+	"blend_path": "C:/Program Files/Blender Foundation/Blender 2.90",
+	"num_instances": 4,
+	"named_sockets": [
+		"DATA",
+		"CTRL"
+	],
+	"seed": 10,
+    "bind_addr": "primaryip",
+	"instance_args": [
+		["--json-config", "./record_config.json"],
+		["--json-config", "./record_config.json"],
+		["--json-config", "./record_config.json"],
+		["--json-config", "./record_config.json"]
+	]
+}

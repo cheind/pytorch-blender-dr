@@ -3,11 +3,15 @@ from torchvision.utils import make_grid
 from tqdm import tqdm
 from pycocotools.coco import COCO
 import json
+import logging
+import matplotlib.pyplot as plt
+from torch import nn
 
 from .utils import MetricMeter
 from .visu import render, render_class_distribution
 from .decode import decode, filter_dets
 from .coco_report import coco_eval, ap_values, draw_roc
+from .evaluation import _to_float
 from .constants import GROUPS
 
 def add_dt(writer, tag, n_iter, output, batch, opt):
@@ -25,7 +29,7 @@ def add_gt(writer, tag, n_iter, output, batch, opt):
 
     inds = batch["cpt_ind"]  # 1 x n_max
     wh = batch["wh"]  # 1 x n_max x 2
-    cids = batch["cls_id"]  # 1 x n_max
+    cids = batch["cids"]  # 1 x n_max
     mask = batch["cpt_mask"].squeeze(0)  # n_max,
     
     ws = wh[..., 0]  # 1 x n_max
@@ -58,55 +62,51 @@ def add_hms(writer, tag, n_iter, output, batch):
 def add_cdistr(writer, tag, n_iter, cdistr, opt):
     """ Add class distribution bar plot to tensorboard writer """
     fig = render_class_distribution(cdistr, opt)
-    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+    writer.add_figure(tag, fig, n_iter, close=True)
 
 def add_pr_curve(writer, tag, n_iter, prec, cids):
     """ Add precision/recall line plot to tensorboard writer """
     fig, ax = plt.subplots()
     draw_roc(prec, cids, ax)
     plt.legend(loc='upper right', bbox_to_anchor=(1.1, 1.1))
-    writer.add_figure(tag, fig, global_step=n_iter, close=True)
+    writer.add_figure(tag, fig, n_iter, close=True)
 
-def use_multiple_devices(model):
+def use_multiple_devices(model, opt):
     if torch.cuda.device_count() > 1 and torch.cuda.is_available():  
         num_devices = torch.cuda.device_count()
         logging.info(f"Available: {num_devices} GPUs!")
         assert opt.batch_size % num_devices == 0, 'Batch size not divisible by #GPUs'
-        model = nn.DataParallel(model)  # Use all available devices
-    
-def save_checkpoint(save_dict, count, opt):
+        model = nn.DataParallel(model)  # Use all available devices 
+
+def save_checkpoint(save_dict, count, metric, loss, best_metric, 
+    best_loss, opt):
+
     torch.save(save_dict, 
         f"{opt.model_folder}/{opt.model_last_tag}.pth")
 
     if count % opt.save_interval == 0 and count != 0:
         torch.save(save_dict, 
             f"{opt.model_folder}/{opt.model_tag}_{count}.pth")
+    
+    if loss <= best_loss and opt.use_loss:
+        best_loss = loss
+        save_dict['best_loss'] = best_loss
+        torch.save(save_dict, 
+            f'{opt.model_folder}/{opt.best_model_tag}.pth')
 
-def save_best_performing_checkpoint(save_dict, best_metric, best_loss, 
-        eval_meter, opt, use_loss=False, use_metric=True):
-    total_loss = meter.get_avg("total_loss")
-    metric = meter.get_val('metric')
-    logging.info(f'Evaluation loss: {total_loss}')
-    logging.info(f'Evaluation metric: {metric}')
-
-    if total_loss <= best_loss:
-        best_loss = total_loss
-        if use_loss:
-            torch.save(save_dict, 
-                f'{opt.model_folder}/{opt.best_model_tag}_loss.pth')
-
-    if metric >= best_metric:
+    if metric >= best_metric and opt.use_metric:
         best_metric = metric
-        if use_metric:
-            torch.save(save_dict, 
-                f'{opt.model_folder}/{opt.best_model_tag}_metric.pth')
+        save_dict['best_metric'] = best_metric
+        torch.save(save_dict, 
+            f'{opt.model_folder}/{opt.best_model_tag}.pth')
     
     return best_metric, best_loss
 
-def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
+def train(meter, epoch, model, optimizer, dataloader, 
+    loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.train()
-    meter = MetricMeter()
+    meter.reset()
 
     with tqdm(total=len(dataloader)) as pbar:
         for i, batch in enumerate(dataloader):
@@ -133,19 +133,27 @@ def train(epoch, model, optimizer, dataloader, loss_fn, writer, opt):
             pbar.update()
         pbar.close()
 
-    return meter
-
 @torch.no_grad()
-def eval(epoch, model, dataloader, loss_fn, writer, opt):
+def eval(meter, epoch, model, dataloader, loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.eval()
-    meter = MetricMeter()
+    meter.reset()
+    
+    # initialize variables for metric calculation
+    image_id = -1    
+    gt_ann_id = -1
+    ground_truth = empty_gt_dict()
+    prediction = []
 
     for i, batch in enumerate(dataloader):
         batch = {k: v.to(device) for k, v in batch.items()}
 
         output = model(batch["image"])
         _, loss_dict = loss_fn(output, batch)
+
+        # evolve variables for metric calculation
+        image_id, gt_ann_id = build_annotations(output, batch, 
+            image_id, gt_ann_id, ground_truth, prediction, opt)
 
         meter.update(loss_dict)
         meter.to_writer(writer, "Val", n_iter=epoch * len(dataloader) + i)
@@ -157,13 +165,25 @@ def eval(epoch, model, dataloader, loss_fn, writer, opt):
             add_dt(writer, "Val/DT", i, output, batch, opt)
             add_gt(writer, "Val/GT", i, output, batch, opt)
             add_hms(writer, "Val/HMS", i, output, batch)
+    
+    # save, load and evaluate
+    gtFile = f'{opt.evaluation_folder}/gt.json'
+    dtFile = f'{opt.evaluation_folder}/pred.json'
+    json.dump(ground_truth, open(gtFile, "w"))
+    json.dump(prediction, open(dtFile, "w"))
+    cocoGt = COCO(gtFile)
+    cocoDt = cocoGt.loadRes(dtFile)
+    prec = coco_eval(cocoGt, cocoDt)
 
-    return meter
+    add_pr_curve(writer, "Val/PR", i, prec, cocoGt.getCatIds())
 
-def stream_train(meter, batch_count, model, optimizer, 
+    return prec
+
+def stream_train(meter, count, model, optimizer, 
     dataloader, loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.train()
+    meter.reset()
 
     with tqdm(total=opt.val_interval) as pbar:
         for i, batch in enumerate(dataloader):
@@ -176,7 +196,7 @@ def stream_train(meter, batch_count, model, optimizer,
             loss, loss_dict = loss_fn(output, batch)
 
             meter.update(loss_dict)
-            meter.to_writer(writer, "Train", n_iter=batch_count + i)
+            meter.to_writer(writer, "Train", n_iter=count + i)
 
             optimizer.zero_grad()
             loss.backward()
@@ -193,7 +213,7 @@ def stream_train(meter, batch_count, model, optimizer,
             pbar.update()
         pbar.close()
     
-    return batch_count + opt.val_interval
+    return count + opt.val_interval
 
 def empty_gt_dict():
     return {
@@ -214,13 +234,14 @@ def build_annotations(output, batch, image_id, gt_ann_id,
     # to get valid batch entries we need a mask,
     # for each batch cpt_mask are all 1s and then all 0s
     cpt_mask = batch["cpt_mask"].cpu().numpy()  # b x n_max
+    batch_size = cpt_mask.shape[0]
 
-    for b in range(opt.batch_size):  # for each batch(image)
+    for b in range(batch_size):  # for each batch(image)
         # 1 x k' x 6 with possibly different k' each iteration,
         # where k' is the number of detections(bboxes)
-        dets = filter_dets(all_dets[b, ...], opt.model_score_threshold)
+        dets = filter_dets(all_dets[b:b+1, ...], opt.model_score_threshold)
         dets[..., :4] = dets[..., :4] * opt.down_ratio  # opt.h x opt.w again
-        dets = dets.cpu().unsqueeze().numpy()  # 1 x k' x 6 -> k' x 6
+        dets = dets.cpu().squeeze(0).numpy()  # 1 x k' x 6 -> k' x 6
         
         image_id += 1
         # build prediction annotations
@@ -249,10 +270,10 @@ def build_annotations(output, batch, image_id, gt_ann_id,
     return image_id, gt_ann_id
 
 @torch.no_grad()
-def stream_eval(meter, batch_count, model,  
-    dataloader, loss_fn, writer, opt):
+def stream_eval(meter, count, model, dataloader, loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.eval()
+    meter.reset()
 
     # initialize variables for metric calculation
     image_id = -1    
@@ -274,7 +295,7 @@ def stream_eval(meter, batch_count, model,
             image_id, gt_ann_id, ground_truth, prediction, opt)
 
         meter.update(loss_dict)
-        meter.to_writer(writer, "Val", n_iter=batch_count + i)
+        meter.to_writer(writer, "Val", n_iter=count + i)
 
         if i % opt.val_vis_interval == 0:
             batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
@@ -293,13 +314,11 @@ def stream_eval(meter, batch_count, model,
     cocoDt = cocoGt.loadRes(dtFile)
     prec = coco_eval(cocoGt, cocoDt)
 
-    metric = ap_values(prec).mean()  # mAP
-    meter.update({'metric': metric})
     add_pr_curve(writer, "Val/PR", i, prec, cocoGt.getCatIds())
     
-    return batch_count + opt.val_len, prec
+    return count + opt.val_len, prec
 
-def adjust_stream(loss, prec, cdistr, count, batch_count,
+def adjust_stream(loss, prec, cdistr, steps, count,
     remotes, writer, opt):
     # adjust number of scene objects and class distribution
     if loss < opt.loss_threshold:
@@ -318,15 +337,17 @@ def adjust_stream(loss, prec, cdistr, count, batch_count,
         for c in min_original_classes:
             c -= 1  # we use zero based indices
             cdistr[c] += opt.distribution_step 
-    elif count > opt.max_train_step:
+    elif steps > opt.max_train_step:
         opt.num_objects -= opt.objects_step
         opt.num_objects = min(1, opt.num_objects)
         # reset class distribution
         cdistr = {k:1 for k in range(30)}  # 1-30 -> 0-29
-        count = 0
+        steps = 0
 
-    add_cdistr(writer, tag, batch_count, cdistr, opt)
+    writer.add_scalar('Number of objects', opt.num_objects)
+    add_cdistr(writer, tag, count, cdistr, opt)
+
     for remote in remotes:
-        remote.send(num_objects=num_objects, cdistr=cdistr)
+        remote.send(num_objects=opt.num_objects, cdistr=cdistr)
 
-    return count
+    return steps
