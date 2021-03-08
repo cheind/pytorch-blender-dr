@@ -7,7 +7,7 @@ import io
 import cv2
 
 from .constants import MAPPING, COLORS
-from .evaluation import _to_float
+from .utils import _to_float
 
 def render(image, detections, opt, show=True, 
     save=False, path=None, denormalize=True, ret=False):

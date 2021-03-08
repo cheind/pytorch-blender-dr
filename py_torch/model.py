@@ -381,10 +381,310 @@ class DLASeg(nn.Module):
         return ret
 
 
-def get_model(heads, head_conv=256, down_ratio=4,
+def centernet(heads, head_conv=256, down_ratio=4,
     pretrained=True):
     model = DLASeg('dla34', heads,
                    pretrained=pretrained,
                    down_ratio=down_ratio,
                    head_conv=head_conv)
     return model
+
+if __name__ == '__main__':
+    import sys
+    sys.path.append('../master')
+    from models.utils import (profile, profile_training, init_torch_seeds,
+        model_info, profile_FP16)
+    
+    from models.dla import centernet
+    
+    heads = {"cpt_hm": 30, "cpt_off": 2, "wh": 2}
+    model = centernet(heads)
+    
+    #"""
+    init_torch_seeds(seed=1234)
+    model_info(model)
+    #profile_FP16(model)
+    #profile(model, amp=True)
+    profile_training(model, amp=True, bsz=32)
+    #"""
+    exit()
+    """ investigate batch size / memory relation
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    Forward time: 161.364ms (cpu)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 45.408ms (cuda)
+    Backward time: 311.690ms (cuda)
+    Maximum of managed memory: 8.428453888GB
+    
+    OOM with 32 bsz
+    """
+    
+    # now try diff convs for centernet
+    from models import convs
+    
+    # settings previously:
+    #convs.BASE = nn.Conv2d
+    #convs.GROUPS = 1  ...but now we will try other convs
+    
+    from models.convs import (DeformConv, SpatiallyConv, 
+        DepthwiseConv, FlattenedConv, GroupedConv, ShuffledGroupedConv)
+    
+    init_torch_seeds(seed=1234)
+    
+    # currently OOM with deformable and autocast not supported,
+    # (error states FP32 has to be used)
+    
+    """
+    # releases all unoccupied cached memory held by the caching allocator 
+    torch.cuda.empty_cache()
+    
+    should not be called, an indeed it does not free memory s.t. there is
+    somehow more available for pytorch, it even slows down since memory that
+    was allocate and reserved must be reallocated (costly)
+    """
+    
+    for Base in [DeformConv, SpatiallyConv, DepthwiseConv, 
+        FlattenedConv, GroupedConv, ShuffledGroupedConv]:
+        
+        # change 'BASE' class for 'Conv' wrapper class
+        convs.BASE = Base
+        if 'group' in Base.__name__.lower():
+            convs.GROUPS = 8
+        else:
+            convs.GROUPS = 1
+            
+        print(f'BASE: {convs.BASE.__name__}, GROUPS: {convs.GROUPS}')
+        # build new model with other conv block types
+        model = centernet(heads)
+        model_info(model)
+        profile(model, amp=True)
+        profile_training(model, amp=True)
+    
+    """
+    ------- old version -------
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 220 layers, 18.5M parameters, 18.5M gradients, 62.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 10.269ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 75.848ms (cuda)
+    Backward time: 408.222ms (cuda)
+    Maximum of managed memory: 12.696158208GB
+    
+    another day: => benchmark may select diff. algorithm
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 220 layers, 18.5M parameters, 18.5M gradients, 62.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 13.174ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 75.138ms (cuda)
+    Backward time: 408.696ms (cuda)
+    Maximum of managed memory: 14.034141184GB
+    
+    # without benchmark: => significanlty slower
+    Model Summary: 220 layers, 18.5M parameters, 18.5M gradients, 62.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    Forward time: 50.602ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 89.595ms (cuda)
+    Backward time: 550.627ms (cuda)
+    Maximum of managed memory: 13.490978816GB
+    
+    # with benchmark and automatic mixed precision (amp):
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 220 layers, 18.5M parameters, 18.5M gradients, 62.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 18.515ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 49.097ms (cuda)
+    Backward time: 292.130ms (cuda)
+    Maximum of managed memory: 8.32569344GB
+    
+    ------ new version --------
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 12.555ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 74.691ms (cuda)
+    Backward time: 419.300ms (cuda)
+    Maximum of managed memory: 15.216934912GB
+    
+    another day:
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 49.608ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 89.089ms (cuda)
+    Backward time: 415.187ms (cuda)
+    Maximum of managed memory: 15.105785856GB
+    
+    # with benchmark and automatic mixed precision (amp):
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 20.943ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 47.379ms (cuda)
+    Backward time: 314.996ms (cuda)
+    Maximum of managed memory: 8.64026624GB
+    
+    # tried profile_FP16: (slower as mixed precision??)
+    # it might be the optimization done in amp mode!
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 30.367ms (cuda)
+    
+    ------ new version (other convs then the nn.Conv2d) --------
+    and benchmark with automatic mixed precision...
+    
+    no amp with DeformConv possible...
+    
+    PyTorch version 1.7.1
+    CUDA version 11.0
+    cuDNN version 8005
+    cuDNN deterministic False
+    cuDNN benchmark True
+    BASE: SpatiallyConv, GROUPS: 1
+    Model Summary: 424 layers, 16.6M parameters, 16.6M gradients, 58.4 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 76.315ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 66.443ms (cuda)
+    Backward time: 466.973ms (cuda)
+    Maximum of managed memory: 14.992539648GB
+    BASE: DepthwiseConv, GROUPS: 1
+    Model Summary: 424 layers, 3.98M parameters, 3.98M gradients, 24.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 42.954ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 57.037ms (cuda)
+    Backward time: 384.364ms (cuda)
+    Maximum of managed memory: 10.624172032GB
+    BASE: FlattenedConv, GROUPS: 1
+    Model Summary: 481 layers, 3.97M parameters, 3.97M gradients, 25.1 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 34.495ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    ...OOM error => even if network size is much smaller than the
+    original implementation one should not forget that the memory
+    expensive part of a network is caching the activation from the
+    forward pass for the backward calculation, since the flattened 
+    convolution has 3 times! nn.Conv2d module in it we ran OOM even
+    if the original implemenation only used half of the available (16GB)
+    memory (8.64026624GB), for convolutions feature maps of the size of
+    output feature maps have to be stored
+    
+    BASE: GroupedConv, GROUPS: 8
+    Model Summary: 367 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 48.222ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 48.164ms (cuda)
+    Backward time: 316.168ms (cuda)
+    Maximum of managed memory: 8.64026624GB
+    BASE: ShuffledGroupedConv, GROUPS: 8
+    Model Summary: 367 layers, 17.9M parameters, 17.9M gradients, 62.0 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 13.272ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 48.040ms (cuda)
+    Backward time: 315.715ms (cuda)
+    Maximum of managed memory: 11.106516992GB
+    """
+    

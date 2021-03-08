@@ -1,46 +1,30 @@
-worker_instances: 4
+# conda activate blend; cd pytorch-blender-dr; python -m py_torch.main
 
 train: True
-debug: False
-use_cuda: True
-
-num_epochs: 4
-batch_size: 16
+replay: True
+debug: True
+cuda: True
+profile: False
+workers: 4
+gpus: [2, 3]
+accumulate: 1
+# note that batch size does not need to be divisible by
+# the number of gpus in distributed data parallel training,
+# we use 1 gpu (node) per process, each gpu will receive batches
+# of size 'batch_size' 
+batch_size: 32
+# enable synchronized batch statistics (across gpus)
+sync_bn: False
+seed: 42
+epochs: 4
 lr: 1.25e-3
 lr_step_size: 1
-weight_decay: 0
+lr_step_gamma: 0.1
+weight_decay: 0.0
+
+# How to determine best performing model
 use_loss: True
 use_metric: True
-
-# Resume training
-resume: True
-model_folder: ./models
-best_model_tag: best_model
-model_tag: model_epoch
-model_last_tag: model_last
-model_path_to_load: ./models/best_model.pth
-
-# Replay instead of launching Blender
-replay: True
-
-# Folder to save visualizations for debugging
-debug_path: ./debug
-
-# real @ /mnt/data/tless_test_real/test_primesense
-# photo realistic @ /mnt/data/tless_train_pbr
-
-# for training, replay from Blender 
-train_path: /mnt/data/20200924_tless_cameranoise_matupdate/tless
-
-# for inference, BOP data, TLessDataset, set replay to False
-inference_path: /mnt/data/tless_test_real/test_primesense
-
-model_score_threshold: 0.3
-render_detections: False
-detection_folder: ./detection
-evaluation_folder: ./evaluation
-# use top-k scores for detection
-k: 25
 
 bbox_visibility_threshold: 0.20
 down_ratio: 4
@@ -48,8 +32,35 @@ mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]
 h: 512
 w: 512
-num_classes: 6
+classes: 6
 n_max: 25
+
+# Resume training
+resume: False
+model_folder: ./models
+best_model_tag: best_model
+model_tag: model_epoch
+model_last_tag: model_last
+model_path_to_load: ./models/best_model.pth
+
+# Folder to save visualizations for debugging
+debug_path: ./debug
+
+# photo realistic @ /mnt/data/tless_train_pbr
+# Training, replay from Blender 
+train_path: /mnt/data/20201001_tless_refine/tless
+
+# Inference, BOP data, TLessDataset, set replay to False
+inference_path: /mnt/data/tless_test_real/test_primesense
+
+# 0.1 for mAP calculation and 0.4 for trainings visualization
+model_score_threshold_test: 0.1
+model_score_threshold_train: 0.4
+render_detections: False
+detection_folder: ./detection
+evaluation_folder: ./evaluation
+# use top-k scores for detection
+k: 25
 
 # in 'units' of epochs 
 val_interval: 1

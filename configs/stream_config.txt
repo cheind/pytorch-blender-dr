@@ -52,9 +52,6 @@ model_path_to_load: ./models/best_model.pth
 # Folder to save visualizations for debugging
 debug_path: ./debug
 
-# real @ /mnt/data/tless_test_real/test_primesense
-# photo realistic @ /mnt/data/tless_train_pbr
-
 # for inference, BOP data, TLessDataset
 inference_path: /mnt/data/tless_test_real/test_primesense
 

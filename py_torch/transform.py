@@ -10,23 +10,22 @@ class Transform:
 
     def __init__(self, opt, bbox_format='coco',
         augmentations: List = None, normalize=True,
-        resize_crop=False, bboxes=True, filter=False):
+        resize_crop=False, bboxes=True, vis_filter=False):
         super().__init__()
         self.h, self.w = opt.h, opt.w  # e.g. 512 x 512
-        self.num_classes = opt.num_classes  # num. of object classes
+        self.classes = opt.classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
         self.down_ratio = opt.down_ratio  # => low resolution 128 x 128
         self.mean = opt.mean
         self.std = opt.std
-
         self.train = opt.train 
-
         self.resize_crop = resize_crop
         self.normalize = normalize
         self.augmentations = augmentations
         self.bbox_format = bbox_format 
         self.bboxes = bboxes
-        self.filter = filter
+        self.vis_filter = vis_filter
+        self.bbox_visibility_threshold = opt.bbox_visibility_threshold
 
         if opt.train:
             if augmentations is None:
@@ -65,7 +64,6 @@ class Transform:
                 # Rescale an image so that maximum side is equal to max_size,
                 # keeping the aspect ratio of the initial image.
                 A.LongestMaxSize(max_size=max(opt.h, opt.w)),
-                A.Normalize(mean=opt.mean, std=opt.std),
             ]
             bbox_params = None
 
@@ -75,15 +73,41 @@ class Transform:
         self.transform_fn = A.Compose(transformations, 
             bbox_params=bbox_params)
 
-        if opt.train:
-            self.item_transform = self.item_transform_train
+        if opt.world_size == 1:  # non mp case!
+            if opt.train:
+                self.item_transform = self.item_transform_train
+            else:
+                self.item_transform = self.item_transform_test
+
+            if vis_filter:
+                self.item_transform = self.item_filter(self.item_transform,
+                    opt.bbox_visibility_threshold)   
+            
+    def item_transform_mp(self, item: dict):
+        '''
+        A transformation without nested structure to be serializeable
+        in a multiprocessing setting!
+        '''
+        if self.vis_filter:
+            bboxes = item['bboxes']  # n x 4
+            cids = item['cids']  # n,
+            vis = item['visfracs']  # n,
+
+            # visibility filtering
+            mask = (vis > self.bbox_visibility_threshold)  # n,
+            item["bboxes"] = bboxes[mask]  # n' x 4
+            cids = cids[mask]  # n',
+
+            # remap the class ids to our group assignment
+            new_ids = np.array([MAPPING[old_id] for old_id in cids], dtype=cids.dtype)
+            item["cids"] = new_ids
+        
+        if self.train:  
+            item = self.item_transform_train(item)
         else:
-            self.item_transform = self.item_transform_test
-
-        if filter:
-            self.item_transform = self.item_filter(self.item_transform,
-                opt.bbox_visibility_threshold)
-
+            item = self.item_transform_test(item)
+        return item
+            
     def item_filter(self, func, bbox_visibility_threshold):
 
         def inner(item):
@@ -114,7 +138,7 @@ class Transform:
         :return: dictionary
             - image: 3 x 512 x 512
             - bboxes: n x 4; [[x, y, width, height], ...]
-            - cpt_hm: 1 x 128 x 128 # num_classes x 128 x 128
+            - cpt_hm: 1 x 128 x 128 # classes x 128 x 128
             - cpt_off: n_max x 2 low resolution offset - [0, 1)
             - cpt_ind: n_max, low resolution indices - [0, 128^2)
             - cpt_mask: n_max,
@@ -168,7 +192,7 @@ class Transform:
 
         cpt_hms = []
         valid_cpt = cpt[cpt_mask.astype(np.bool)]  # n_valid x 2
-        for i in range(self.num_classes):
+        for i in range(self.classes):
             mask = (cids[:len_valid] == i)  # n_valid,
             xy = valid_cpt[mask]  # n x 2, valid entries for each class
             cpt_hms.append(generate_heatmap((hl, wl), xy))  # each 1 x hl x wl

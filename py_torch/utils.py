@@ -4,6 +4,9 @@ import numpy as np
 import sys
 import io
 
+def _to_float(x):
+    return float(f"{x:.2f}")
+
 def generate_heatmap(shape, xy: np.ndarray, mask=None, sigma=2, cutoff=1e-3, bleed=True):
     """
     Generates a single belief map of 'shape' for each point in 'xy'.
@@ -133,6 +136,7 @@ class Config:
             if '[' in v:  # parse lists
                 is_float = True if '.' in v else False
                 v = v.strip()[1:-1].split(',')
+                v = [x for x in v if x != '']  # case: [0, ] 
                 v = list(map(float if is_float else int, v))
                 dtype = np.float32 if is_float else np.int32
                 v = np.array(v, dtype=dtype)

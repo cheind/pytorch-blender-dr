@@ -5,10 +5,11 @@ debug: False
 use_cuda: True
 
 num_epochs: 4
-batch_size: 16
-lr: 1.25e-4
-lr_step_size: 10
-weight_decay: 1.0e-3
+batch_size: 32
+lr: 1.25e-3
+lr_step_size: 1
+lr_step_gamma: 0.2
+weight_decay: 0
 use_loss: True
 use_metric: True
 
@@ -26,11 +27,9 @@ replay: True
 # Folder to save visualizations for debugging
 debug_path: ./debug
 
-# real @ /mnt/data/tless_test_real/test_primesense
 # photo realistic @ /mnt/data/tless_train_pbr
-
 # for training, replay from Blender 
-train_path: /mnt/data/20200924_tless_cameranoise_matupdate/tless
+train_path: /mnt/data/202010001_tless_refine/tless
 
 # for inference, BOP data, TLessDataset, set replay to False
 inference_path: /mnt/data/tless_test_real/test_primesense

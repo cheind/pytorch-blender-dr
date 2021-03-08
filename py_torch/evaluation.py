@@ -9,9 +9,9 @@ from tqdm import tqdm
 from .constants import CATEGORIES
 from .utils import FileStream
 from .decode import decode, filter_dets
+from .visu import render
+from .utils import _to_float
 
-def _to_float(x):
-    return float(f"{x:.2f}")
 
 def create_gt_anns(rbg_relpaths, all_bboxes, all_category_ids, 
     path):
@@ -76,6 +76,8 @@ def evaluate_model(model, dl, opt):
         out = model(batch["image"])  # 1 x 3 x h x w
         dets = decode(out, opt.k)  # 1 x k x 6
         dets = filter_dets(dets, opt.model_score_threshold)  # 1 x k' x 6
+        
+        #import pdb; pdb.set_trace()
 
         image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
         dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets

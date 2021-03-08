@@ -1,13 +1,22 @@
+import argparse
+import math
+import time
+import os
+import sys
+import copy
 from contextlib import ExitStack
 import albumentations as A
 import numpy as np
-import logging
 import torch
 import torch.nn as nn
 from torch import optim
 from torch.utils import data
 from torch.utils.tensorboard import SummaryWriter
-import argparse
+from torch.cuda.amp import autocast, GradScaler
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+import torch.multiprocessing as mp
 
 # git clone https://github.com/cheind/pytorch-blender.git <DST>
 # pip install -e <DST>/pkg_pytorch
@@ -16,10 +25,9 @@ from blendtorch import btt
 # relative imports, call with -m option
 # >> python -m py_torch.main
 from .utils import Config
-from .train import (train, eval, use_multiple_devices, 
-    save_checkpoint)
+from .train import train_new, val_new, save_checkpoint
 from .loss import CenterLoss
-from .model import get_model
+from .model import centernet
 from .visu import iterate  # iterate over dataloader (debugging)
 from .transform import Transform
 from .evaluation import evaluate_model
@@ -27,159 +35,265 @@ from .utils import MetricMeter
 from .coco_report import ap_values
 from .dataset import TLessDataset
 
-def main(opt):
-            
-    def load_from_checkpoint(opt):
-        if opt.resume or not opt.train:
-            nonlocal model
-            logging.info(f'Load checkpoint from {opt.model_path_to_load}...')
-            checkpoint = torch.load(opt.model_path_to_load, 
-                map_location='cuda' if opt.use_cuda else 'cpu')
-            model.load_state_dict(checkpoint['model'])
-            if opt.train:  # skipt this for inference
-                nonlocal optimizer, scheduler
-                optimizer.load_state_dict(checkpoint['optimizer'])
-                scheduler.load_state_dict(checkpoint['scheduler'])
+sys.path.append('../master')
+from models.utils import (profile, profile_training, init_torch_seeds,
+    model_info, time_synchronized, initialize_weights,
+    is_parallel, setup, cleanup)
 
-            start_epoch = checkpoint.get('epoch', -1) + 1         
-            best_metric = checkpoint.get('best_metric', 0)
-            best_loss = checkpoint.get('best_loss', 1000)
-        
-            logging.info(f'Start epoch: {start_epoch}')
-            logging.info(f'Best loss: {best_loss}')
-            logging.info(f'Best metric: {best_metric}')
-        else: 
-            logging.info('Train with pretrained backbone...')
-            start_epoch = 0
-            best_metric = 0  # higher = better
-            best_loss = 1000  # lower = better
-        
-        return start_epoch, best_metric, best_loss
+#from models.dla import centernet
 
-    # Choose augmentations for training
+def main(rank, opt):
+    opt = copy.deepcopy(opt)
+    opt.rank = rank
+    
+    if opt.world_size > 1 and opt.cuda:  
+        # must be called before any other cuda related function
+        os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in opt.gpus])
+    
+    np.random.seed(opt.seed)
+    init_torch_seeds(opt.seed)  # seed != 0 will be faster non-deterministic
+    
     augmentations = [
         A.HueSaturationValue(hue_shift_limit=20, 
             sat_shift_limit=30, val_shift_limit=20, p=0.5),
         A.ChannelShuffle(p=0.5),
         A.HorizontalFlip(p=0.2),
     ] if opt.train else []
-    # Resize images to opt.h, opt.w in training
-    transformation = Transform(opt, augmentations=augmentations, 
-        filter=opt.replay, resize_crop=opt.train)
+    
+    tf = Transform(opt, augmentations=augmentations, 
+        vis_filter=opt.replay, resize_crop=opt.train)
 
     with ExitStack() as es:
         if opt.replay:
-            logging.info('Use data from Blender replay...')
+            if opt.rank == 0:
+                print('Use data from Blender replay.')
             ds = btt.FileDataset(
                 opt.train_path, 
-                item_transform=transformation,
+                item_transform=tf if opt.world_size == 1 else tf.item_transform_mp,
             )
         else:
-            logging.info('Use BOP data...')
-            ds = TLessDataset(opt, transformation)
+            if opt.rank == 0:
+                print('Use BOP data.')
+            ds = TLessDataset(opt, tf if opt.world_size == 1 else tf.item_transform_mp)
 
-        # head_name: num. of channels
-        heads = {"cpt_hm": opt.num_classes, "cpt_off": 2, "wh": 2}
-        model = get_model(heads)
-
-        # export CUDA_VISIBLE_DEVICES=1,2,3 or 1 or 0,1
-        # Run cuda.py to see available GPUs or nvidia-smi
-        # Note: if CUDA_VISIBLE_DEVICES=1,2,3 then cuda device 0
-        # in pytorch refers to physical cuda device 1
-        device = torch.device('cuda' if torch.cuda.is_available() and opt.use_cuda else 'cpu')
-        logging.info(f'Using device: {device}')
-        model.to(device)
-        num_params = sum(p.numel() for p in model.parameters())
-        print(f'Model with: {num_params/10**6:.2f}M number of parameters')
+        model = centernet({'cpt_hm': opt.classes, 'cpt_off': 2, 'wh': 2}, pretrained=True)
+        initialize_weights(model)
             
-        # either we load model (optimizer, scheduler) 
-        # or train from pretrained backbone
+        if torch.cuda.is_available() and opt.cuda:
+            torch.cuda.manual_seed_all(opt.seed)
+            if opt.world_size > 1:
+                setup(opt.rank, opt.world_size)
+            device = torch.device(opt.rank)
+            torch.cuda.set_device(opt.rank)
+            print(f'Running on rank {opt.rank}, device {torch.cuda.current_device()}.')
+        else:
+            device = torch.device('cpu')
+            opt.cuda = False
+            opt.world_size = 1
+            print('Running on CPU.')
+            
+        model.to(device)
+            
+        if opt.rank == 0:
+            model_info(model)
+        
+        if opt.rank == 0 and opt.profile:
+            profile(model, amp=opt.cuda)
+            profile_training(model, amp=opt.cuda)
+        
+        if opt.resume or not opt.train:
+            print(f'Load checkpoint from {opt.model_path_to_load}.')
+            map_location = {'cuda:0': f'cuda:{opt.rank}'} if opt.cuda else 'cpu'
+            checkpoint = torch.load(opt.model_path_to_load, map_location)
+            model.load_state_dict(checkpoint['model'])
+            
         if opt.train:
             optimizer = optim.Adam(model.parameters(), 
                     lr=opt.lr, weight_decay=opt.weight_decay)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
-                step_size=opt.lr_step_size, gamma=0.2)
+                step_size=opt.lr_step_size, gamma=opt.lr_step_gamma) 
+            scaler = GradScaler(enabled=opt.cuda)
+            
+            if opt.resume:
+                optimizer.load_state_dict(checkpoint['optimizer'])
+                scheduler.load_state_dict(checkpoint['scheduler'])
+                scaler.load_state_dict(checkpoint['scaler'])
+                
+                start_epoch = checkpoint.get('epoch', -1) + 1         
+                best_metric = checkpoint.get('best_metric', 0)
+                best_loss = checkpoint.get('best_loss', 1E8)
         
-        start_epoch, best_metric, best_loss = load_from_checkpoint(opt)
+                if opt.rank == 0:
+                    print(f'Start epoch: {start_epoch}')
+                    print(f'Best loss: {best_loss}')
+                    print(f'Best metric: {best_metric}')          
+            else: 
+                if opt.rank == 0:
+                    print('Use randomly initialized network...')
+                start_epoch = 0
+                best_metric = 0  # higher = better
+                best_loss = 1E8  # lower = better
+            
+        if opt.world_size > 1:
+            if opt.sync_bn:  # batch statistics across multipe devices
+                model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
+            model = DDP(model, device_ids=[opt.rank], find_unused_parameters=True)
 
         if not opt.train:  
-            logging.info("Runnig script for inference...")
+            print('Runnig script for testing...')
             if opt.debug:  # sanity check on subset
-                ds = data.Subset(ds, indices=list(range(min(100, len(ds)))))
+                indices = list(range(min(opt.debug_size_test, len(ds))))
+                ds = data.Subset(ds, indices=indices)
+                
             test_dl = data.DataLoader(ds, batch_size=1, 
-                num_workers=opt.worker_instances, shuffle=False)
-            evaluate_model(model, test_dl, opt)
+                num_workers=opt.workers, shuffle=False)
+            
+            evaluate_model(model, test_dl, opt)  # TODO
         else:
-            logging.info("Runnig script for training...")       
-            
-            use_multiple_devices(model, opt)
-            loss_fn = CenterLoss()
-            
-            num_samples = len(ds) if not opt.debug else min(100, len(ds))
-            logging.info(f"Number of samples: {num_samples}")
-            logging.info(f"Batch size: {opt.batch_size}")
-
-            split = int(0.9 * num_samples)
-            logging.info(f"Split data set at sample nr. {split}")
-            train_ds = data.Subset(ds, indices=list(range(split)))
-            val_ds = data.Subset(ds, indices=list(range(split, num_samples)))
-
-            logging.info(f"Training data size: {len(train_ds)}")
-            logging.info(f"Validation data size: {len(val_ds)}")
+            # network training 
+            if not opt.debug:
+                split = int(0.9 * len(ds))
+                train_ds = data.Subset(ds, indices=list(range(split)))
+                val_ds = data.Subset(ds, indices=list(range(split, len(ds))))
+            else:  # sanity check on subset when debugging
+                train_ds = data.Subset(ds, indices=list(range(opt.debug_size_train)))
+                val_ds = data.Subset(ds, 
+                    indices=list(range(len(ds) - opt.debug_size_val, len(ds))))
+                
+            if opt.world_size > 1:
+                # sampler will split up dataset and each process will 
+                # get a part of the whole data exclusively 
+                sampler = DistributedSampler(train_ds, shuffle=True) 
+            else: 
+                sampler = None
 
             train_dl = data.DataLoader(train_ds, batch_size=opt.batch_size, 
-                num_workers=opt.worker_instances, shuffle=True, drop_last=True)
+                num_workers=opt.workers, shuffle=(sampler is None), 
+                sampler=sampler, drop_last=True, 
+                pin_memory=True, persistent_workers=False)
+            
             val_dl = data.DataLoader(val_ds, batch_size=opt.batch_size, 
-                num_workers=opt.worker_instances, shuffle=False)
-
-            logging.info('Open tensorboard to track trainings progress')
-            # tensorboard --logdir=runs --bind_all
-            writer = SummaryWriter()
+                num_workers=opt.workers, shuffle=False, sampler=None,
+                pin_memory=True, persistent_workers=False)
+            
+            if opt.rank == 0:
+                print('Runnig script for training...')
+                print(f'Batch size: {opt.batch_size}')
+                print(f'Training data size: {len(train_ds)}')
+                print(f'Validation data size: {len(val_ds)}')
+                print('Open tensorboard to track trainings progress.')
+                print('>> tensorboard --logdir=runs --bind_all')
+                writer = SummaryWriter()
+            else: 
+                writer = None 
 
             train_meter = MetricMeter()
-            eval_meter = MetricMeter()     
-
-            for epoch in range(start_epoch, start_epoch + opt.num_epochs):
-                logging.info(f"Epoch: {epoch} / {start_epoch + opt.num_epochs - 1}")
-                train(train_meter, epoch, model, optimizer, 
-                    train_dl, loss_fn, writer, opt)
-                scheduler.step()
-
-                prec = eval(eval_meter, epoch, model, val_dl, loss_fn, writer, opt)
+            eval_meter = MetricMeter()    
+            
+            loss_fn = CenterLoss()
+            
+            if opt.world_size > 1:
+                if opt.debug:
+                    print(f'Rank: {opt.rank} encountered loading barrier.')
+                dist.barrier()  # wait for all processes to reach barrier
+            
+            if opt.rank == 0:  # measure overall trainings time
+                since = time_synchronized()
                 
-                if not isinstance(model, nn.DataParallel):
-                    state_dict = model.state_dict() 
-                else:
-                    state_dict = model.module.state_dict()
-                save_dict = {
-                    'epoch': epoch,
-                    'model': state_dict,
-                    'optimizer': optimizer.state_dict(),
-                    'scheduler': scheduler.state_dict(),
-                }
+            opt.start_epoch = start_epoch
+            for epoch in range(start_epoch, start_epoch + opt.epochs):
+                if opt.world_size > 1:  # so shuffle works properly in DDP mode
+                    sampler.set_epoch(epoch)
+                
+                train_new(train_meter, epoch, model, optimizer, 
+                    scaler, train_dl, loss_fn, writer, opt)
+                
+                scheduler.step()
+                
+                if opt.rank == 0:
+                    prec = val_new(eval_meter, epoch, model, val_dl, loss_fn, writer, opt)
+                    
+                    if prec is not None:
+                        metric = ap_values(prec).mean()  # mAP
+                    else:
+                        metric = 0
+                    writer.add_scalar('Val/metric', metric, epoch * len(val_dl))
 
-                loss = eval_meter.get_avg('total_loss')
-                metric = ap_values(prec).mean()  # mAP
-                # set x-axis of metric tracking to same as loss for better graph comparison
-                writer.add_scalar('Val/metric', metric, epoch * len(val_dl))
-
-                # save model, optimizer, scheduler... 
-                best_metric, best_loss = save_checkpoint(save_dict, 
-                    epoch, metric, loss, best_metric, best_loss, opt)
+                    loss = eval_meter.get_avg('total_loss')
+                    msd = (model.module.state_dict() if is_parallel(model) 
+                        else model.state_dict())
+                    save_dict = {
+                        'epoch': epoch,
+                        'model': msd,
+                        'optimizer': optimizer.state_dict(),
+                        'scheduler': scheduler.state_dict(),
+                        'scaler': scaler.state_dict(),
+                    }
+                    print('pre checkpoint save')
+                    best_metric, best_loss = save_checkpoint(save_dict, 
+                        epoch, metric, loss, best_metric, best_loss, opt)
+                
+                if opt.world_size > 1:
+                    if opt.debug:
+                        print(f'Rank: {opt.rank} encountered epoch barrier.')
+                    dist.barrier()  # wait for all processes to reach barrier
+            
+            if opt.rank == 0:
+                elapsed = time_synchronized() - since
+                print(f'Training complete: {elapsed // 60:.0f}m {elapsed % 60:.0f}s')
+                print(f'Best validation metric/loss: {best_metric:3f}/{best_loss:3f}')
+        
+            if opt.world_size > 1: 
+                cleanup()
+                
+def run(main_fn, opt):
+    mp.spawn(main_fn,
+             args=(opt,),
+             nprocs=opt.world_size,
+             join=True)
 
 if __name__ == '__main__':
     config_path = './configs'
-    logging.basicConfig(level=logging.INFO)
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', default='config.txt')
     args = parser.parse_args()
 
     opt = Config(f'{config_path}/{args.config}')
-
+    
+    opt.world_size = len(opt.gpus)
+    
+    if opt.train:
+        opt.model_score_threshold = opt.model_score_threshold_train
+    else:
+        opt.model_score_threshold = opt.model_score_threshold_test
+        
     if opt.debug:
         opt.model_score_threshold = 0.1
-        opt.num_epochs = 1
+        opt.epochs = 2
         opt.train_vis_interval = 1
         opt.val_vis_interval = 1
-
-    main(opt)
+        # how many samples to be processed for debbuging purpose
+        opt.debug_size_train = 3 * opt.batch_size * opt.world_size
+        opt.debug_size_val = 2 * opt.batch_size
+        opt.debug_size_test = 4 * opt.batch_size
+    
+    if opt.world_size > 1 and opt.train:
+        run(main, opt)
+    else:  # testing without DDP
+        opt.world_size = 1
+        main(rank=0, opt=opt)
+        
+    """
+    Model Summary: 310 layers, 17.9M parameters, 17.9M gradients, 61.8 GFLOPs
+    Input size: torch.Size([1, 3, 512, 512])
+    benchmark warm up...
+    Forward time: 14.580ms (cuda)
+    Input size: torch.Size([16, 3, 512, 512])
+    benchmark warm up forward...
+    benchmark warm up backward...
+    run through forward pass for 100 runs...
+    run through forward and backward pass for 100 runs...
+    Forward time: 46.818ms (cuda)
+    Backward time: 313.878ms (cuda)
+    Maximum of managed memory: 11.507073024GB
+    """

@@ -122,7 +122,7 @@ def decode(out, k):
         topk_class number b x k x 1
     ...in exact that order!
     """
-    cpt_hm = torch.sigmoid(out["cpt_hm"])
+    cpt_hm = torch.sigmoid(out["cpt_hm"].float())
     cpt_off = out["cpt_off"]
     wh = out["wh"]
 
