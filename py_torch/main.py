@@ -192,11 +192,6 @@ def main(rank, opt):
             
             loss_fn = CenterLoss()
             
-            if opt.world_size > 1:
-                if opt.debug:
-                    print(f'Rank: {opt.rank} encountered loading barrier.')
-                dist.barrier()  # wait for all processes to reach barrier
-            
             if opt.rank == 0:  # measure overall trainings time
                 since = time_synchronized()
                 
@@ -229,14 +224,8 @@ def main(rank, opt):
                         'scheduler': scheduler.state_dict(),
                         'scaler': scaler.state_dict(),
                     }
-                    print('pre checkpoint save')
                     best_metric, best_loss = save_checkpoint(save_dict, 
                         epoch, metric, loss, best_metric, best_loss, opt)
-                
-                if opt.world_size > 1:
-                    if opt.debug:
-                        print(f'Rank: {opt.rank} encountered epoch barrier.')
-                    dist.barrier()  # wait for all processes to reach barrier
             
             if opt.rank == 0:
                 elapsed = time_synchronized() - since
@@ -261,14 +250,11 @@ if __name__ == '__main__':
     opt = Config(f'{config_path}/{args.config}')
     
     opt.world_size = len(opt.gpus)
-    
-    if opt.train:
-        opt.model_score_threshold = opt.model_score_threshold_train
-    else:
-        opt.model_score_threshold = opt.model_score_threshold_test
         
     if opt.debug:
-        opt.model_score_threshold = 0.1
+        # when there is a warning about optimizer step and lr schduler
+        # that is totally fine and nothing to worry...
+        opt.model_score_threshold_high = 0.1
         opt.epochs = 2
         opt.train_vis_interval = 1
         opt.val_vis_interval = 1

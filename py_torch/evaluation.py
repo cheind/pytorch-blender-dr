@@ -75,7 +75,7 @@ def evaluate_model(model, dl, opt):
 
         out = model(batch["image"])  # 1 x 3 x h x w
         dets = decode(out, opt.k)  # 1 x k x 6
-        dets = filter_dets(dets, opt.model_score_threshold)  # 1 x k' x 6
+        dets = filter_dets(dets, opt.model_score_threshold_low)  # 1 x k' x 6
         
         #import pdb; pdb.set_trace()
 

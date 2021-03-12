@@ -17,7 +17,7 @@ from .constants import GROUPS
 
 def add_dt(writer, tag, n_iter, output, batch, opt):
     dets = decode(output, opt.k)  # 1 x k x 6
-    dets = filter_dets(dets, opt.model_score_threshold)  # 1 x k' x 6
+    dets = filter_dets(dets, opt.model_score_threshold_high)  # 1 x k' x 6
 
     image = batch["image"]  # original image
     dets[..., :4] = dets[..., :4] * opt.down_ratio
@@ -347,7 +347,7 @@ def build_annotations(output, batch, image_id, gt_ann_id,
     for b in range(batch_size):  # for each batch(image)
         # 1 x k' x 6 with possibly different k' each iteration,
         # where k' is the number of detections(bboxes)
-        dets = filter_dets(all_dets[b:b+1, ...], opt.model_score_threshold)
+        dets = filter_dets(all_dets[b:b+1, ...], opt.model_score_threshold_low)
         dets[..., :4] = dets[..., :4] * opt.down_ratio  # opt.h x opt.w again
         dets = dets.cpu().squeeze(0).numpy()  # 1 x k' x 6 -> k' x 6
         
