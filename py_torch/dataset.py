@@ -72,7 +72,8 @@ class TLessDataset(data.Dataset):
         }
         if not self.opt.train:
             item["image_id"] = index
-        item = self.item_transform(item)
+        if self.item_transform:
+            item = self.item_transform(item)
         return item
 
     def _parse_bop_scene(self, scenepath):

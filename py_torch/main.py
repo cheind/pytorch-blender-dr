@@ -24,23 +24,21 @@ from blendtorch import btt
 
 # relative imports, call with -m option
 # >> python -m py_torch.main
-from .utils import Config
-from .train import train_new, val_new, save_checkpoint
+from .train import train, val, save_checkpoint
 from .loss import CenterLoss
-from .model import centernet
 from .visu import iterate  # iterate over dataloader (debugging)
 from .transform import Transform
 from .evaluation import evaluate_model
-from .utils import MetricMeter
 from .coco_report import ap_values
 from .dataset import TLessDataset
-
-sys.path.append('../master')
-from models.utils import (profile, profile_training, init_torch_seeds,
+from .utils import (profile, profile_training, init_torch_seeds,
     model_info, time_synchronized, initialize_weights,
-    is_parallel, setup, cleanup)
+    is_parallel, setup, cleanup, MetricMeter, data_mean_and_std,
+    Config, prune_weights, item_transform_image_only)
 
-#from models.dla import centernet
+from .model import get_model
+#from model_v2 import get_model
+#from model_v3 import get_model
 
 def main(rank, opt):
     opt = copy.deepcopy(opt)
@@ -51,7 +49,7 @@ def main(rank, opt):
         os.environ['CUDA_VISIBLE_DEVICES'] = ','.join([str(x) for x in opt.gpus])
     
     np.random.seed(opt.seed)
-    init_torch_seeds(opt.seed)  # seed != 0 will be faster non-deterministic
+    init_torch_seeds(opt.seed, verbose=(rank == 0))
     
     augmentations = [
         A.HueSaturationValue(hue_shift_limit=20, 
@@ -76,7 +74,8 @@ def main(rank, opt):
                 print('Use BOP data.')
             ds = TLessDataset(opt, tf if opt.world_size == 1 else tf.item_transform_mp)
 
-        model = centernet({'cpt_hm': opt.classes, 'cpt_off': 2, 'wh': 2}, pretrained=True)
+        heads_dict = {'cpt_hm': opt.classes, 'cpt_off': 2, 'wh': 2}
+        model = get_model(heads_dict, pretrained=opt.pretrained)
         initialize_weights(model)
             
         if torch.cuda.is_available() and opt.cuda:
@@ -89,6 +88,7 @@ def main(rank, opt):
         else:
             device = torch.device('cpu')
             opt.cuda = False
+            opt.amp = False
             opt.world_size = 1
             print('Running on CPU.')
             
@@ -98,8 +98,8 @@ def main(rank, opt):
             model_info(model)
         
         if opt.rank == 0 and opt.profile:
-            profile(model, amp=opt.cuda)
-            profile_training(model, amp=opt.cuda)
+            profile(model, amp=opt.amp)
+            profile_training(model, amp=opt.amp)
         
         if opt.resume or not opt.train:
             print(f'Load checkpoint from {opt.model_path_to_load}.')
@@ -112,7 +112,7 @@ def main(rank, opt):
                     lr=opt.lr, weight_decay=opt.weight_decay)
             scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 
                 step_size=opt.lr_step_size, gamma=opt.lr_step_gamma) 
-            scaler = GradScaler(enabled=opt.cuda)
+            scaler = GradScaler(enabled=opt.amp)
             
             if opt.resume:
                 optimizer.load_state_dict(checkpoint['optimizer'])
@@ -147,8 +147,12 @@ def main(rank, opt):
                 
             test_dl = data.DataLoader(ds, batch_size=1, 
                 num_workers=opt.workers, shuffle=False)
+
+            # prune lowest model weights to requested sparsity
+            if opt.test_sparsity > 0:
+                prune_weights(model, amount=opt.test_sparsity)
             
-            evaluate_model(model, test_dl, opt)  # TODO
+            evaluate_model(model, test_dl, opt)
         else:
             # network training 
             if not opt.debug:
@@ -200,13 +204,13 @@ def main(rank, opt):
                 if opt.world_size > 1:  # so shuffle works properly in DDP mode
                     sampler.set_epoch(epoch)
                 
-                train_new(train_meter, epoch, model, optimizer, 
+                train(train_meter, epoch, model, optimizer, 
                     scaler, train_dl, loss_fn, writer, opt)
                 
                 scheduler.step()
                 
                 if opt.rank == 0:
-                    prec = val_new(eval_meter, epoch, model, val_dl, loss_fn, writer, opt)
+                    prec = val(eval_meter, epoch, model, val_dl, loss_fn, writer, opt)
                     
                     if prec is not None:
                         metric = ap_values(prec).mean()  # mAP
@@ -262,6 +266,31 @@ if __name__ == '__main__':
         opt.debug_size_train = 3 * opt.batch_size * opt.world_size
         opt.debug_size_val = 2 * opt.batch_size
         opt.debug_size_test = 4 * opt.batch_size
+
+    if opt.load_data_stats:
+        if opt.replay:
+            ds = btt.FileDataset(
+                opt.train_path, 
+                item_transform=item_transform_image_only,
+            )
+        else:
+            ds = TLessDataset(opt, item_transform_image_only)
+
+        # load custom dataset statistic if available
+        mode = 'train' if opt.train else 'test'
+        path = f'./etc/dataset_stats_{mode}.npz'
+
+        dl = data.DataLoader(ds, batch_size=1, num_workers=8, shuffle=False)
+        if not os.path.exists(path):
+            mean, std = data_mean_and_std(dl, channel_first=False)
+            np.savez(path, mean=mean.numpy(), std=std.numpy())
+            print(f'Saved data statistics to: {path}')
+        
+        if os.path.exists(path):
+            npzfile = np.load(path)
+            opt.mean, opt.std = npzfile['mean'], npzfile['std']
+            print(f'Loaded data statistics from: {path}')
+            print('mean =', opt.mean, 'std =', opt.std)
     
     if opt.world_size > 1 and opt.train:
         run(main, opt)

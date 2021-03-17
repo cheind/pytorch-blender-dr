@@ -5,6 +5,7 @@ import logging
 import time
 import torch
 from tqdm import tqdm
+from torch.cuda.amp import autocast
 
 from .constants import CATEGORIES
 from .utils import FileStream
@@ -73,7 +74,8 @@ def evaluate_model(model, dl, opt):
     for (i, batch) in tqdm(enumerate(dl), desc="Evaluation", total=len(dl)):
         batch = {k: v.to(device) for k, v in batch.items()}
 
-        out = model(batch["image"])  # 1 x 3 x h x w
+        with autocast(enabled=opt.amp):
+            out = model(batch["image"])  # 1 x 3 x h x w
         dets = decode(out, opt.k)  # 1 x k x 6
         dets = filter_dets(dets, opt.model_score_threshold_low)  # 1 x k' x 6
         

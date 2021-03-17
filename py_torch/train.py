@@ -95,39 +95,8 @@ def save_checkpoint(save_dict, count, metric, loss, best_metric,
             f'{opt.model_folder}/{opt.best_model_tag}.pth')
     
     return best_metric, best_loss
-
-def train(meter, epoch, model, optimizer, loader, 
-    loss_fn, writer, opt):
-    device = next(model.parameters()).device
-    model.train()
-    meter.reset()
-
-    with tqdm(total=len(loader)) as pbar:
-        for i, batch in enumerate(loader):
-            batch = {k: v.to(device) for k, v in batch.items()}
-
-            output = model(batch["image"])
-            loss, loss_dict = loss_fn(output, batch)
-
-            meter.update(loss_dict)
-            meter.to_writer(writer, "Train", n_iter=epoch * len(loader) + i)
-
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-
-            if i % opt.train_vis_interval == 0:
-                batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
-                output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
-                
-                add_dt(writer, "Train/DT", epoch * len(loader) + i, output, batch, opt)
-                add_gt(writer, "Train/GT", epoch * len(loader) + i, output, batch, opt)
-                add_hms(writer, "Train/HMS", epoch * len(loader) + i, output, batch)
-            pbar.set_postfix(loss=loss.item())
-            pbar.update()
-        pbar.close()
         
-def train_new(meter, epoch, model, optimizer, scaler, loader, 
+def train(meter, epoch, model, optimizer, scaler, loader, 
     loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.train()
@@ -142,7 +111,7 @@ def train_new(meter, epoch, model, optimizer, scaler, loader,
     for i, batch in pbar:
         batch = {k: v.to(device) for k, v in batch.items()}
 
-        with autocast(enabled=opt.cuda):
+        with autocast(enabled=opt.amp):
             output = model(batch["image"])
             loss, loss_dict = loss_fn(output, batch)
         
@@ -176,7 +145,7 @@ def train_new(meter, epoch, model, optimizer, scaler, loader,
                 add_hms(writer, "Train/HMS", epoch * len(loader) + i, output, batch)
                 
 @torch.no_grad()
-def val_new(meter, epoch, model, loader, loss_fn, writer, opt):
+def val(meter, epoch, model, loader, loss_fn, writer, opt):
     device = next(model.parameters()).device
     model.eval()
     meter.reset()
@@ -196,7 +165,7 @@ def val_new(meter, epoch, model, loader, loss_fn, writer, opt):
     for i, batch in pbar:
         batch = {k: v.to(device) for k, v in batch.items()}
 
-        with autocast(enabled=opt.cuda):
+        with autocast(enabled=opt.amp):
             output = model(batch["image"])
             loss, loss_dict = loss_fn(output, batch)
         
@@ -239,53 +208,6 @@ def val_new(meter, epoch, model, loader, loss_fn, writer, opt):
     except Exception as e:
         print(e)
         return None
-            
-
-@torch.no_grad()
-def val(meter, epoch, model, loader, loss_fn, writer, opt):
-    device = next(model.parameters()).device
-    model.eval()
-    meter.reset()
-    
-    # initialize variables for metric calculation
-    image_id = -1    
-    gt_ann_id = -1
-    ground_truth = empty_gt_dict()
-    prediction = []
-
-    for i, batch in enumerate(loader):
-        batch = {k: v.to(device) for k, v in batch.items()}
-
-        output = model(batch["image"])
-        _, loss_dict = loss_fn(output, batch)
-
-        # evolve variables for metric calculation
-        image_id, gt_ann_id = build_annotations(output, batch, 
-            image_id, gt_ann_id, ground_truth, prediction, opt)
-
-        meter.update(loss_dict)
-        meter.to_writer(writer, "Val", n_iter=epoch * len(loader) + i)
-
-        if i % opt.val_vis_interval == 0:
-            batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
-            output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
-            
-            add_dt(writer, "Val/DT", epoch * len(loader) + i, output, batch, opt)
-            add_gt(writer, "Val/GT", epoch * len(loader) + i, output, batch, opt)
-            add_hms(writer, "Val/HMS", epoch * len(loader) + i, output, batch)
-    
-    # save, load and evaluate
-    gtFile = f'{opt.evaluation_folder}/gt.json'
-    dtFile = f'{opt.evaluation_folder}/pred.json'
-    json.dump(ground_truth, open(gtFile, "w"))
-    json.dump(prediction, open(dtFile, "w"))
-    cocoGt = COCO(gtFile)
-    cocoDt = cocoGt.loadRes(dtFile)
-    prec = coco_eval(cocoGt, cocoDt)
-
-    add_pr_curve(writer, "Val/PR", epoch * len(loader) + i, prec, cocoGt.getCatIds())
-
-    return prec
 
 def stream_train(meter, count, model, optimizer, 
     loader, loss_fn, writer, opt):
