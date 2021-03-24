@@ -2,9 +2,66 @@ import albumentations as A
 import numpy as np 
 from typing import List
 import cv2
+import os 
+from glob import glob
+from multiprocessing.pool import ThreadPool
+from tqdm import tqdm
 
 from .utils import generate_heatmap
 from .constants import MAPPING
+
+def load_fda_images(fda_path, rank=0, cache=False, max_gb=2.0):
+    # returns None or list of path strings or numpy images if cache=True!
+    # Caching images (11.757GB): 100%|██████████████████| 10080/10080 [00:44<00:00, 226.40it/s]
+
+    if not os.path.exists(fda_path) and rank == 0:
+        print('Invalid folder path for Fourier Domain Adaptation(FDA) images:', fda_path)
+    else:
+        # load tless RGB images
+        extensions = (
+            "*.png", 
+            "*.jpg", 
+            "*.jpeg",
+        )
+        fda_files = [] 
+        for ext in extensions:
+            # there are also subfolders with mask, depth we don't want!
+            pattern = os.path.join(fda_path, '*' ,'rgb', ext)
+            fda_files.extend(glob(pattern, recursive=True))
+
+        # import pdb; pdb.set_trace()
+
+        if len(fda_files) > 0:
+            if cache:
+                fda_files = np.random.permutation(fda_files)  # shuffle randomly
+                results = ThreadPool(4).imap(read_fn, fda_files)
+                if rank == 0:
+                    pbar = tqdm(results, total=len(fda_files))
+                else:
+                    pbar = results
+
+                gb = 0
+                fda_images = []
+                for image in pbar:
+                    fda_images.append(image)
+                    gb += image.nbytes
+                    pbar.desc = f'Caching images ({gb / 1E9:.3f}GB)'
+                    if gb/1E9 >= max_gb:
+                        if rank == 0:
+                            print(f'Reached maximum of allowed caching memory: {max_gb}GB')
+                        break
+                    
+                return fda_images  # numpy images
+            else:
+                return fda_files  # list of path strings
+
+    return None  # otherwise
+
+def read_fn(path):
+    return cv2.cvtColor(cv2.imread(path), cv2.COLOR_BGR2RGB)
+
+def identity_fn(x):
+    return x
 
 class Transform:
 
@@ -16,6 +73,8 @@ class Transform:
         self.classes = opt.classes  # num. of object classes
         self.n_max = opt.n_max  # num. of max objects per image
         self.down_ratio = opt.down_ratio  # => low resolution 128 x 128
+        self.sigma = opt.sigma
+        self.normalize_wh = opt.normalize_wh
         self.mean = opt.mean
         self.std = opt.std
         self.train = opt.train 
@@ -27,15 +86,33 @@ class Transform:
         self.vis_filter = vis_filter
         self.bbox_visibility_threshold = opt.bbox_visibility_threshold
 
+        self.cache = opt.cache_fda_images
+        self.fda_only = opt.fda_only
+        self.fda_images = load_fda_images(opt.fda_path, opt.rank, cache=self.cache)
+
         if opt.train:
             if augmentations is None:
-                # standard augmentation if not given explicitly
-                transformations = [
+                # default augmentation if not given explicitly
+                augmentations = [
                     A.HueSaturationValue(p=0.5),
                     A.ChannelShuffle(p=0.4),
                     A.HorizontalFlip(p=0.2),
                     A.GaussNoise(p=0.3),
                 ]
+
+            if self.fda_images is not None:
+                if self.fda_only:
+                    transformations = [
+                        A.FDA(self.fda_images, p=0.5, read_fn=identity_fn if self.cache else read_fn)
+                    ]
+                else:  # combine FDA with std augmentation pipeline
+                    transformations = [
+                        A.OneOrOther(
+                            A.Sequential(augmentations),
+                            A.FDA(self.fda_images, 
+                                read_fn=identity_fn if self.cache else read_fn),
+                        p=1)
+                    ]
             else:
                 transformations = augmentations
 
@@ -168,10 +245,20 @@ class Transform:
         cpt_mask = np.zeros((self.n_max,), dtype=np.uint8)
         cpt_mask[:len_valid] = 1
 
-        # LOW RESOLUTION bboxes
-        wh = np.zeros((self.n_max, 2), dtype=np.float32)
-        wh[:len_valid, :] = bboxes[:, 2:-1] / self.down_ratio
-
+        # the original size of bboxes is in [0, h], [0, w] range
+        if not self.normalize_wh:  # prepare targets for bbox regression
+            # LOW RESOLUTION in range [0, hl] and [0, wl]
+            # for height and width respectively
+            wh = np.zeros((self.n_max, 2), dtype=np.float32)
+            wh[:len_valid, :] = bboxes[:, 2:-1] / self.down_ratio
+        else:
+            # NORMALIZED in range [0, 1] and [0, 1]
+            # for height and width respectively
+            wh = np.zeros((self.n_max, 2), dtype=np.float32)
+            # COCO bboxes xmin, ymin, width, height
+            wh[:len_valid, 0] = bboxes[:, 2] / self.w
+            wh[:len_valid, 1] = bboxes[:, 3] / self.h
+            
         cids = np.zeros((self.n_max,), dtype=np.uint8)
         # the bbox labels help to reassign the correct classes
         cids[:len_valid] = cids_old[bboxes[:, -1].astype(np.int32)]
@@ -195,12 +282,14 @@ class Transform:
         for i in range(self.classes):
             mask = (cids[:len_valid] == i)  # n_valid,
             xy = valid_cpt[mask]  # n x 2, valid entries for each class
-            cpt_hms.append(generate_heatmap((hl, wl), xy))  # each 1 x hl x wl
+            # each generated heatmap has 1 x hl x wl
+            cpt_hms.append(generate_heatmap((hl, wl), xy, sigma=self.sigma))  
         
         cpt_hm = np.concatenate(cpt_hms, axis=0) 
 
         # same shape for default collate_fn
         bboxes_ = np.zeros((self.n_max, 4))
+        # high resolution bboxes
         bboxes_[:len_valid, :] = bboxes[:, :4]
         
         item = {

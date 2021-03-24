@@ -50,7 +50,8 @@ def _topk(heat: torch.Tensor, k):
     """
 
     batch, cat, height, width = heat.size()
-    topk_scores, topk_inds = torch.topk(heat.view(batch, -1), k)
+    #topk_scores, topk_inds = torch.topk(heat.view(batch, -1), k)
+    topk_scores, topk_inds = torch.topk(heat.reshape(batch, -1), k)
     topk_cids = torch.true_divide(topk_inds, (height * width)).int()
     topk_inds = topk_inds % (height * width)
     topk_ys = torch.true_divide(topk_inds, width).int().float()
@@ -98,7 +99,7 @@ def _transpose_and_gather_feat(feat, ind):
     return feat  # b x k x c
 
 
-def decode(out, k):
+def decode(out, opt):
     """
     From network output to center point detections.
 
@@ -125,28 +126,40 @@ def decode(out, k):
     cpt_hm = torch.sigmoid(out["cpt_hm"].float())
     cpt_off = out["cpt_off"]
     wh = out["wh"]
+    if opt.normalize_wh:  # into [0, 1] range
+        wh = torch.sigmoid(wh.float())
 
     b = cpt_hm.size(0)
     cpt_hm = _nms(cpt_hm)  # b x c x h x w
 
     # each of shape: b x k
-    topk_scores, topk_inds, topk_cids, topk_ys, topk_xs = _topk(cpt_hm, k)
+    topk_scores, topk_inds, topk_cids, topk_ys, topk_xs = _topk(cpt_hm, opt.k)
 
     topk_cpt_off = _transpose_and_gather_feat(cpt_off, topk_inds)  # b x k x 2
 
     # each of shape: b x k
-    topk_xs = topk_xs.view(b, k, 1) + topk_cpt_off[..., 0:1]
-    topk_ys = topk_ys.view(b, k, 1) + topk_cpt_off[..., 1:2]
+    topk_xs = topk_xs.view(b, opt.k, 1) + topk_cpt_off[..., 0:1]
+    topk_ys = topk_ys.view(b, opt.k, 1) + topk_cpt_off[..., 1:2]
 
     topk_wh = _transpose_and_gather_feat(wh, topk_inds)  # b x k x 2
-    topk_cids = topk_cids.view(b, k, 1).float()  # b x k x 1
-    topk_scores = topk_scores.view(b, k, 1)  # b x k x 1
+    if opt.normalize_wh:  # from [0, 1] to [0, hl] or [0, wl]
+        hl, wl = cpt_hm.shape[-2:]  # low res. h and w
+        topk_wh[:, :, 0] *= wl
+        topk_wh[:, :, 1] *= hl
+    
+    topk_cids = topk_cids.view(b, opt.k, 1).float()  # b x k x 1
+    topk_scores = topk_scores.view(b, opt.k, 1)  # b x k x 1
 
     # bboxes, coco format: x, y, width, height; b x k x 4
     topk_bboxes = torch.cat([topk_xs - topk_wh[..., 0:1] / 2,
                              topk_ys - topk_wh[..., 1:2] / 2,
-                             topk_wh[..., 0:1],
-                             topk_wh[..., 1:2]], dim=-1)
+                             topk_wh[..., 0:1],  # width at index 0
+                             topk_wh[..., 1:2]], dim=-1)  # height at index 1
+    # NOTE: detection are for x,y and w,h values in low resolution
+    # thus we have to multiply by down ratio to get opt.h and opt.w size 
+    # image dimension fitting bboxes!
+    topk_bboxes *= opt.down_ratio
+
     detections = torch.cat([
         topk_bboxes,
         topk_scores,

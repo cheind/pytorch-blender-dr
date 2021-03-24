@@ -26,7 +26,7 @@ from blendtorch import btt
 # >> python -m py_torch.main
 from .train import train, val, save_checkpoint
 from .loss import CenterLoss
-from .visu import iterate  # iterate over dataloader (debugging)
+from .visu import iterate, save_images
 from .transform import Transform
 from .evaluation import evaluate_model
 from .coco_report import ap_values
@@ -36,9 +36,9 @@ from .utils import (profile, profile_training, init_torch_seeds,
     is_parallel, setup, cleanup, MetricMeter, data_mean_and_std,
     Config, prune_weights, item_transform_image_only)
 
-from .model import get_model
-#from model_v2 import get_model
-#from model_v3 import get_model
+from .model import get_model as get_model_v1
+from .model_v2 import get_model as get_model_v2
+from .model_v3 import get_model as get_model_v3
 
 def main(rank, opt):
     opt = copy.deepcopy(opt)
@@ -56,10 +56,17 @@ def main(rank, opt):
             sat_shift_limit=30, val_shift_limit=20, p=0.5),
         A.ChannelShuffle(p=0.5),
         A.HorizontalFlip(p=0.2),
-    ] if opt.train else []
+    ] if opt.train and opt.augmentation else []
     
+    if opt.rank == 0:
+        if not opt.normalize_img:
+            print('WARNING: input images will not be normalized!')
+        if not opt.augmentation and opt.train:
+            print('WARNING: input images will not be augmented!')
+
     tf = Transform(opt, augmentations=augmentations, 
-        vis_filter=opt.replay, resize_crop=opt.train)
+        vis_filter=opt.replay, resize_crop=opt.train,
+        normalize=opt.normalize_img)
 
     with ExitStack() as es:
         if opt.replay:
@@ -73,9 +80,13 @@ def main(rank, opt):
             if opt.rank == 0:
                 print('Use BOP data.')
             ds = TLessDataset(opt, tf if opt.world_size == 1 else tf.item_transform_mp)
-
+        
         heads_dict = {'cpt_hm': opt.classes, 'cpt_off': 2, 'wh': 2}
-        model = get_model(heads_dict, pretrained=opt.pretrained)
+        model = globals()[f'get_model_v{opt.version}'](heads_dict, 
+            pretrained=opt.pretrained, down_ratio=opt.down_ratio,
+            normalize_wh=opt.normalize_wh)
+        if opt.rank == 0:
+            print('pretrained:', opt.pretrained)
         initialize_weights(model)
             
         if torch.cuda.is_available() and opt.cuda:
@@ -139,6 +150,12 @@ def main(rank, opt):
                 model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
             model = DDP(model, device_ids=[opt.rank], find_unused_parameters=True)
 
+        # save_images(ds, opt, N=20)
+        # if opt.world_size > 1:  # prepare clean exit
+        #     torch.distributed.barrier()
+        #     cleanup()
+        # return  # exit
+
         if not opt.train:  
             print('Runnig script for testing...')
             if opt.debug:  # sanity check on subset
@@ -194,7 +211,7 @@ def main(rank, opt):
             train_meter = MetricMeter()
             eval_meter = MetricMeter()    
             
-            loss_fn = CenterLoss()
+            loss_fn = CenterLoss(opt)
             
             if opt.rank == 0:  # measure overall trainings time
                 since = time_synchronized()

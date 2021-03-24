@@ -76,13 +76,13 @@ def evaluate_model(model, dl, opt):
 
         with autocast(enabled=opt.amp):
             out = model(batch["image"])  # 1 x 3 x h x w
-        dets = decode(out, opt.k)  # 1 x k x 6
+        dets = decode(out, opt)  # 1 x k x 6
         dets = filter_dets(dets, opt.model_score_threshold_low)  # 1 x k' x 6
         
         #import pdb; pdb.set_trace()
 
         image_gt = batch["image_gt"]  # 1 x h x w x 3, original image
-        dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
+        #dets[..., :4] = dets[..., :4] * opt.down_ratio  # 512 x 512 space dets
 
         shape_pp = batch["shape_pp"]  # 1 x 2
         h_gt, w_gt = image_gt.size(1), image_gt.size(2)

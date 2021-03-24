@@ -102,6 +102,21 @@ def render_class_distribution(cdistr: dict, opt):
     fig.add_axes(ax)
     return fig
 
+def save_images(dataset, opt, N=20):
+    # to inspect images from a replay blender file
+    # without normalization or augmentation
+    if opt.rank == 0:
+        assert not opt.normalize_img
+        assert not opt.augmentation 
+        import cv2 as cv
+
+        indices = np.random.permutation(len(dataset))[:N]
+        for idx, index in enumerate(indices):
+            img = dataset[index]['image']
+            img = np.transpose(img, (1,2,0))  # h x w x 3
+            cv.imwrite(f'./debug/{idx:03d}.png', 
+                cv.cvtColor(img, cv.COLOR_RGB2BGR).astype(np.uint8))
+
 def iterate(dl, opt):
     DPI=96
     for step, item in enumerate(dl):

@@ -336,7 +336,8 @@ def fill_fc_weights(layers):
 
 class DLASeg(nn.Module):
     def __init__(self, base_name, heads,
-                 pretrained=True, down_ratio=4, head_conv=256):
+                 pretrained=True, down_ratio=4, 
+                 head_conv=256, normalize_wh=False):
         super(DLASeg, self).__init__()
         assert down_ratio in [2, 4, 8, 16]
         self.heads = heads
@@ -358,6 +359,9 @@ class DLASeg(nn.Module):
                               kernel_size=1, stride=1,
                               padding=0, bias=True))
                 if 'hm' in head:
+                    fc[-1].bias.data.fill_(-2.19)
+                elif 'wh' in head and normalize_wh:
+                    # here we use sigmoid as well to get into [0,1] range
                     fc[-1].bias.data.fill_(-2.19)
                 else:
                     fill_fc_weights(fc)
@@ -381,11 +385,13 @@ class DLASeg(nn.Module):
         return ret
 
 
-def get_model(heads, head_conv=256, down_ratio=4, pretrained=True):
+def get_model(heads, head_conv=256, down_ratio=4, pretrained=True,
+    normalize_wh=False):
     model = DLASeg('dla34', heads,
                    pretrained=pretrained,
                    down_ratio=down_ratio,
-                   head_conv=head_conv)
+                   head_conv=head_conv,
+                   normalize_wh=normalize_wh)
     return model
 
 if __name__ == '__main__':

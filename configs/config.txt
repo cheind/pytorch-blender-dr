@@ -2,20 +2,24 @@
 # pkill -9 python; ps
 # tensorboard --logdir=runs --bind_all
 
-train: True
-resume: False
-replay: True
-debug: True
+# to test different model architectures 
+# (version 1 from used in our paper)
+version: 1
+
+train: False
+replay: False
+
+debug: False
 cuda: True
 amp: True
 # when True will calculate dataset mean and std
 # to use these custom values instead of the ones
 # given in this config file (ImageNet statistics)
 load_data_stats: True
+pretrained: True
 profile: False
 workers: 4
-gpus: [0] 
-# [0, 1, 2, 3]
+gpus: [0, 1, 2, 3]
 accumulate: 1
 # note that batch size does not need to be divisible by
 # the number of gpus in distributed data parallel training,
@@ -32,7 +36,36 @@ lr_step_gamma: 0.1
 weight_decay: 0.0
 # prune lowest model weights when testing
 test_sparsity: 0.1
-pretrained: True
+
+# fourier domain adaptation image folder path of real 
+# images from tless (additional augmentation strategy)
+# /mnt/data/tless_train_real
+# (give invalid path to surpress fda usage e.g. /no_fda)
+fda_path: /no_fda
+fda_only: False
+cache_fda_images: False
+
+# heatmap target sigma value of gaussian center peaks
+# note: the same sigma value will act differently on the 
+# heatmap target for different down ratios 
+# (default is 1 for down ratio 4 in Objects as Points paper)
+# for transfering knowledge to another domain it seems to be 
+# beneficial to have broader gaussian peaks 
+# ==> use sigma 2 @ down ratio 4
+sigma: 2
+down_ratio: 4
+
+# bbox values for w, h in in range [0, 1] if normalized  
+normalize_wh: False
+
+# select type of bbox regression loss: 'L1', 'IoU', 'GIoU', 'DIoU', 'CIoU'
+wh_loss: 'L1'
+
+# normalize images to mean=0, variance=1 
+normalize_img: True
+
+# if specified augmentation should be used in training
+augmentation: True
 
 # How to determine best performing model
 use_loss: True
@@ -40,7 +73,6 @@ use_metric: True
 
 # too avoid annotation for heavily occluded objects of interest! 
 bbox_visibility_threshold: 0.20
-down_ratio: 4
 mean: [0.485, 0.456, 0.406]
 std: [0.229, 0.224, 0.225]
 h: 512
@@ -49,6 +81,9 @@ classes: 6
 n_max: 25
 
 # Resume training
+# whether to resume training model from
+# model_path_to_load or not 
+resume: False
 model_folder: ./models
 best_model_tag: best_model
 model_tag: model_epoch
@@ -59,6 +94,8 @@ model_path_to_load: ./models/best_model.pth
 debug_path: ./debug
 
 # photo realistic @ /mnt/data/tless_train_pbr
+# tless real (no replay) @ /mnt/data/tless_train_real
+# blender @ /mnt/data/20201001_tless_refine/tless
 # Training, replay from Blender 
 train_path: /mnt/data/20201001_tless_refine/tless
 

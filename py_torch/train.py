@@ -16,14 +16,57 @@ from .evaluation import _to_float
 from .constants import GROUPS
 
 def add_dt(writer, tag, n_iter, output, batch, opt):
-    dets = decode(output, opt.k)  # 1 x k x 6
+    dets = decode(output, opt)  # 1 x k x 6
     dets = filter_dets(dets, opt.model_score_threshold_high)  # 1 x k' x 6
 
     image = batch["image"]  # original image
-    dets[..., :4] = dets[..., :4] * opt.down_ratio
+    #dets[..., :4] = dets[..., :4] * opt.down_ratio
 
     fig = render(image, dets, opt, show=False, save=False, path=None, ret=True)
     writer.add_figure(tag, fig, global_step=n_iter, close=True)
+
+def add_head_info(writer, tag, n_iter, output, batch, opt):
+    wh = output['wh']  # 1 x 2 x hl x wl
+    wh = wh.permute(1, 0, 2, 3)  # 2 x 1 x hl x wl
+
+    off = output['cpt_off']  # 1 x 2 x hl x wl
+    off = off.permute(1, 0, 2, 3)  # 2 x 1 x hl x wl
+
+    if not opt.normalize_wh:  # [0, wl] and [0, hl] instead
+        hl, wl = opt.h / opt.down_ratio , opt.w / opt.down_ratio
+        # ensure range restriction, regression is here unbounded
+        wh[0, ...] = torch.clamp(wh[0, ...].float(), 0, wl)
+        wh[1, ...] = torch.clamp(wh[1, ...].float(), 0, hl)
+        # normalize
+        wh[0, ...] /= wl  # predicted width in [0, 1]
+        wh[1, ...] /= hl  # predicted height in [0, 1]
+    else:
+        # here sigmoid is applied like in the heat map case
+        # to ensure the network keeps a range restriction itself
+        wh = torch.sigmoid(wh.float())  # not implemented for half!
+    
+    # offset has range [-1, +1] we want it in [0, 1]
+    off += 1
+    off /= 2
+
+    # left heatmap is prediction and right is ground truth gaussian peaks
+    # at center point locations...
+    # bring the output heat map in range to [0, 1] with sigmoid
+    hm = [torch.sigmoid(output["cpt_hm"].float()), batch["cpt_hm"]]  # 1 x classes x hl x wl
+    hm = [x.max(dim=1, keepdims=True)[0] for x in hm]  # 1 x 1 x hl x wl
+    hm = torch.cat(hm, dim=0)  # 2 x 1 x hl x wl
+
+    # first row shows width and height predictions for bboxes
+    # the second row shows the offset predictions which are used
+    # to get better center point location when upsampling the 
+    # model detections from the low resolution (down ratio) maps
+    # thus when down ratio is 4 the offset can shift the center point 
+    # up to -4 or +4 pixels
+    info = torch.cat((hm, wh, off), dim=0)  # 6 x 1 x hl x wl
+    info = make_grid(info, nrow=2,
+        pad_value=1)  # 3 x (2*hl + padding) x (2*wl + padding)
+
+    writer.add_image(tag, info, n_iter)
 
 def add_gt(writer, tag, n_iter, output, batch, opt):
     image = batch["image"]  # original image
@@ -33,32 +76,33 @@ def add_gt(writer, tag, n_iter, output, batch, opt):
     cids = batch["cids"]  # 1 x n_max
     mask = batch["cpt_mask"].squeeze(0)  # n_max,
     
-    ws = wh[..., 0]  # 1 x n_max
-    hs = wh[..., 1]  # 1 x n_max
     wl = opt.w / opt.down_ratio
+    hl = opt.h / opt.down_ratio
+
+    # wh in low resolution space, later multiplied by down ratio
+    if opt.normalize_wh:
+        # bring to low resolution from [0, 1] range
+        ws = wh[..., 0] * wl  # 1 x n_max
+        hs = wh[..., 1] * hl  # 1 x n_max
+    else:
+        ws = wh[..., 0]  # 1 x n_max
+        hs = wh[..., 1]  # 1 x n_max
+
+    # get scores and center points
     ys = torch.true_divide(inds, wl).int().float()  # 1 x n_max
     xs = (inds % wl).int().float()  # 1 x n_max
     scores = torch.ones_like(cids)  # 1 x n_max
     
+    # back to COCO format bboxes
     dets = torch.stack([xs - ws / 2, ys - hs / 2, 
         ws, hs, scores, cids], dim=-1)  # 1 x n_max x 6
 
     dets = dets[:, mask.bool()]  # 1 x n' x 6
+    # bring detections from low resolution to high resolution
     dets[..., :4] = dets[..., :4] * opt.down_ratio
 
     fig = render(image, dets, opt, show=False, save=False, path=None, ret=True)
     writer.add_figure(tag, fig, global_step=n_iter, close=True)
-
-def add_hms(writer, tag, n_iter, output, batch):
-    # bring the output heat map in range to [0, 1]
-    hm = [torch.sigmoid(output["cpt_hm"].float()), batch["cpt_hm"]]  # 1 x classes x hl x wl
-    hm = [x.max(dim=1, keepdims=True)[0] for x in hm]  # 1 x 1 x hl x wl
-    hm = torch.cat(hm, dim=0)  # 2 x 1 x hl x wl
-
-    hm = make_grid(hm, normalize=True, range=(0, 1), 
-        pad_value=1)  # 3 x h x 2 * w + padding
-
-    writer.add_image(tag, hm, n_iter)
 
 def add_cdistr(writer, tag, n_iter, cdistr, opt):
     """ Add class distribution bar plot to tensorboard writer """
@@ -107,7 +151,8 @@ def train(meter, epoch, model, optimizer, scaler, loader,
         pbar = tqdm(pbar, total=len(loader), desc='train')
         if opt.cuda:
             torch.cuda.reset_peak_memory_stats(device)
-        
+    
+    n_iter = 0
     for i, batch in pbar:
         batch = {k: v.to(device) for k, v in batch.items()}
 
@@ -128,8 +173,9 @@ def train(meter, epoch, model, optimizer, scaler, loader,
             optimizer.zero_grad(set_to_none=True)
 
         if opt.rank == 0:
+            n_iter = epoch * len(loader) + i
             meter.update(loss_dict)
-            meter.to_writer(writer, "Train", n_iter=epoch * len(loader) + i)
+            meter.to_writer(writer, "Train", n_iter)
             
             pf = f'mem: {mem:.2f}/{max_mem:.2f}GB, '
             pf += f'loss: {loss:.2f}, '  # total loss 
@@ -140,10 +186,10 @@ def train(meter, epoch, model, optimizer, scaler, loader,
                 batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
                 output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
 
-                add_dt(writer, "Train/DT", epoch * len(loader) + i, output, batch, opt)
-                add_gt(writer, "Train/GT", epoch * len(loader) + i, output, batch, opt)
-                add_hms(writer, "Train/HMS", epoch * len(loader) + i, output, batch)
-                
+                add_dt(writer, "Train/DT", n_iter, output, batch, opt)
+                add_gt(writer, "Train/GT", n_iter, output, batch, opt)
+                add_head_info(writer, "Train/HEADS", n_iter, output, batch, opt)
+
 @torch.no_grad()
 def val(meter, epoch, model, loader, loss_fn, writer, opt):
     device = next(model.parameters()).device
@@ -162,6 +208,7 @@ def val(meter, epoch, model, loader, loss_fn, writer, opt):
     if opt.cuda:
         torch.cuda.reset_peak_memory_stats(device)
     
+    n_iter = 0
     for i, batch in pbar:
         batch = {k: v.to(device) for k, v in batch.items()}
 
@@ -177,7 +224,7 @@ def val(meter, epoch, model, loader, loss_fn, writer, opt):
             image_id, gt_ann_id, ground_truth, prediction, opt)
         
         meter.update(loss_dict)
-        meter.to_writer(writer, "Val", n_iter=epoch * len(loader) + i)
+        meter.to_writer(writer, "Val", n_iter=n_iter)
 
         pf = f'mem: {mem:.2f}/{max_mem:.2f}GB, '
         pf += f'loss: {loss:.2f}, '  # total loss 
@@ -185,12 +232,13 @@ def val(meter, epoch, model, loader, loss_fn, writer, opt):
         pbar.set_postfix_str(pf)
 
         if i % opt.val_vis_interval == 0:
+            n_iter = epoch * len(loader) + i
             batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
             output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
 
-            add_dt(writer, "Val/DT", epoch * len(loader) + i, output, batch, opt)
-            add_gt(writer, "Val/GT", epoch * len(loader) + i, output, batch, opt)
-            add_hms(writer, "Val/HMS", epoch * len(loader) + i, output, batch)
+            add_dt(writer, "Val/DT", n_iter, output, batch, opt)
+            add_gt(writer, "Val/GT", n_iter, output, batch, opt)
+            add_head_info(writer, "Val/HEADS", n_iter, output, batch, opt)
 
     try:
         # save, load and evaluate
@@ -202,7 +250,7 @@ def val(meter, epoch, model, loader, loss_fn, writer, opt):
         cocoDt = cocoGt.loadRes(dtFile)
         prec = coco_eval(cocoGt, cocoDt)
 
-        add_pr_curve(writer, "Val/PR", epoch * len(loader) + i, prec, cocoGt.getCatIds())
+        add_pr_curve(writer, "Val/PR", n_iter, prec, cocoGt.getCatIds())
 
         return prec
     except Exception as e:
@@ -211,22 +259,25 @@ def val(meter, epoch, model, loader, loss_fn, writer, opt):
 
 def stream_train(meter, count, model, optimizer, 
     loader, loss_fn, writer, opt):
+    assert opt.normalize_wh is False, 'Not supported yet'
     device = next(model.parameters()).device
     model.train()
     meter.reset()
 
+    n_iter = 0
     with tqdm(total=opt.val_interval) as pbar:
         for i, batch in enumerate(loader):
             if i == opt.val_interval:
                 break
 
+            n_iter = count + i
             batch = {k: v.to(device) for k, v in batch.items()}
 
             output = model(batch["image"])
             loss, loss_dict = loss_fn(output, batch)
 
             meter.update(loss_dict)
-            meter.to_writer(writer, "Train", n_iter=count + i)
+            meter.to_writer(writer, "Train", n_iter)
 
             optimizer.zero_grad()
             loss.backward()
@@ -236,9 +287,9 @@ def stream_train(meter, count, model, optimizer,
                 batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
                 output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
                 
-                add_dt(writer, "Train/DT", epoch * len(loader) + i, output, batch, opt)
-                add_gt(writer, "Train/GT", epoch * len(loader) + i, output, batch, opt)
-                add_hms(writer, "Train/HMS", epoch * len(loader) + i, output, batch)
+                add_dt(writer, "Train/DT", n_iter, output, batch, opt)
+                add_gt(writer, "Train/GT", n_iter, output, batch, opt)
+                add_head_info(writer, "Train/HEADS", n_iter, output, batch, opt)
             pbar.set_postfix(loss=loss.item())
             pbar.update()
         pbar.close()
@@ -257,7 +308,7 @@ def empty_gt_dict():
 def build_annotations(output, batch, image_id, gt_ann_id, 
     ground_truth, prediction, opt):
     # b x k x 6; b x k x [bbox, score, cid]
-    all_dets = decode(output, opt.k)  # unfiltered 
+    all_dets = decode(output, opt)  # unfiltered 
 
     gt_bboxes = batch["bboxes"].cpu().numpy()  # b x n_max x 4
     gt_cids = batch["cids"].cpu().numpy()  # b x n_max
@@ -270,7 +321,7 @@ def build_annotations(output, batch, image_id, gt_ann_id,
         # 1 x k' x 6 with possibly different k' each iteration,
         # where k' is the number of detections(bboxes)
         dets = filter_dets(all_dets[b:b+1, ...], opt.model_score_threshold_low)
-        dets[..., :4] = dets[..., :4] * opt.down_ratio  # opt.h x opt.w again
+        # dets[..., :4] = dets[..., :4] * opt.down_ratio  # opt.h x opt.w again
         dets = dets.cpu().squeeze(0).numpy()  # 1 x k' x 6 -> k' x 6
         
         image_id += 1
@@ -301,6 +352,7 @@ def build_annotations(output, batch, image_id, gt_ann_id,
 
 @torch.no_grad()
 def stream_eval(meter, count, model, loader, loss_fn, writer, opt):
+    assert opt.normalize_wh is False, 'Not supported yet'
     device = next(model.parameters()).device
     model.eval()
     meter.reset()
@@ -311,10 +363,12 @@ def stream_eval(meter, count, model, loader, loss_fn, writer, opt):
     ground_truth = empty_gt_dict()
     prediction = []
 
+    n_iter = 0
     for i, batch in enumerate(loader):
         if i == opt.val_len:
             break
 
+        n_iter = count + i
         batch = {k: v.to(device) for k, v in batch.items()}
 
         output = model(batch["image"])
@@ -325,15 +379,15 @@ def stream_eval(meter, count, model, loader, loss_fn, writer, opt):
             image_id, gt_ann_id, ground_truth, prediction, opt)
 
         meter.update(loss_dict)
-        meter.to_writer(writer, "Val", n_iter=count + i)
+        meter.to_writer(writer, "Val", n_iter)
 
         if i % opt.val_vis_interval == 0:
             batch = {k: v[:1].detach().clone().cpu() for k, v in batch.items()}
             output = {k: v[:1].detach().clone().cpu() for k, v in output.items()}
             
-            add_dt(writer, "Val/DT", epoch * len(loader) + i, output, batch, opt)
-            add_gt(writer, "Val/GT", epoch * len(loader) + i, output, batch, opt)
-            add_hms(writer, "Val/HMS", epoch * len(loader) + i, output, batch)
+            add_dt(writer, "Val/DT", n_iter, output, batch, opt)
+            add_gt(writer, "Val/GT", n_iter, output, batch, opt)
+            add_head_info(writer, "Val/HEADS", n_iter, output, batch, opt)
 
     # save, load and evaluate
     gtFile = f'{opt.evaluation_folder}/gt.json'
@@ -344,7 +398,7 @@ def stream_eval(meter, count, model, loader, loss_fn, writer, opt):
     cocoDt = cocoGt.loadRes(dtFile)
     prec = coco_eval(cocoGt, cocoDt)
 
-    add_pr_curve(writer, "Val/PR", epoch * len(loader) + i, prec, cocoGt.getCatIds())
+    add_pr_curve(writer, "Val/PR", n_iter, prec, cocoGt.getCatIds())
     
     return count + opt.val_len, prec
 
